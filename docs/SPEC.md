@@ -123,10 +123,18 @@ blocks. No block inside an inline context.
    self-closing slash: `<br>`, `<hr>`, `<img …>`, `<meta …>`.
 3. **Escaping.** Text nodes escape exactly `& < >`. Attribute values escape
    exactly `& < "`. No other character references are emitted; non-ASCII is
-   literal UTF-8. `fmt` decodes other valid references (e.g. `&nbsp;`, `&#8212;`)
-   into their characters.
+   literal UTF-8. `fmt` decodes character references into their characters:
+   numeric references (`&#8212;`, `&#x2014;`), and the named references of the
+   WHATWG list (`src/entities-data.js`). Decoding is not optional — a valid
+   reference that survives as text gets escaped and is then shown to a reader as
+   its own spelling (`Jos&eacute;` would read `Jos&eacute;`). Therefore: a name
+   outside the WHATWG list (`&nbsp2;`), a name HTML5 only accepts with its
+   semicolon (`&hellip`), and an out-of-range or surrogate numeric reference all
+   stay literal text, and an invalid numeric reference becomes U+FFFD, which is
+   what a browser shows for it. Names are case-sensitive.
 4. **Whitespace model.**
-   - Runs of whitespace (space, tab, LF, CR, FF) collapse to one space.
+   - Runs of whitespace (space, tab, LF, CR, FF) collapse to one space. No other
+     character is whitespace here: U+00A0 and other spaces keep their meaning.
    - Leading whitespace at the start of a block's content and trailing
      whitespace at the end of a block's content is removed.
    - Interior single spaces are preserved: `<p>Hello <strong>x</strong>!</p>`.

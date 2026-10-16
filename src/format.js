@@ -14,6 +14,18 @@ import { escapeText, escapeAttr } from './entities.js';
 
 export const INDENT = '  ';
 
+// The whitespace model of docs/SPEC.md §4.4 is exactly space, tab, LF, CR and FF.
+// `\s` would also match U+00A0, U+2000-U+200A, U+3000 and U+FEFF, so a decoded
+// `&nbsp;` would collapse to a space and lose its no-break meaning.
+const WHITESPACE_RUN = /[ \t\n\r\f]+/g;
+const TRIM_START = /^[ \t\n\r\f]+/;
+const TRIM_END = /[ \t\n\r\f]+$/;
+
+/** Strip the model whitespace a browser's `white-space: normal` would strip. */
+function trimModel(text) {
+  return text.replace(TRIM_START, '').replace(TRIM_END, '');
+}
+
 const DROP_ATTRS = new Set(['align', 'border', 'cellpadding', 'cellspacing', 'bgcolor',
   'color', 'face', 'valign', 'style', 'class', 'onclick', 'onload', 'role']);
 
@@ -88,14 +100,14 @@ function normalizeChildren(children, parentName, warnings) {
         mapped.push({ type: 'text', text: child.text });
       }
     } else {
-      mapped.push({ ...child, text: String(child.text ?? '').replace(/--+/g, '-').trim() });
+      mapped.push({ ...child, text: trimModel(String(child.text ?? '').replace(/--+/g, '-')) });
     }
   }
   return fixWhitespace(mapped);
 }
 
 function stripTrailingBlank(text) {
-  return text.replace(/\r\n?/g, '\n').replace(/\s+$/, '') + '\n';
+  return text.replace(/\r\n?/g, '\n').replace(TRIM_END, '') + '\n';
 }
 
 /** Whitespace model, docs/SPEC.md §4.4. */
@@ -104,9 +116,10 @@ function fixWhitespace(children) {
   const kept = [];
   for (const child of children) {
     if (child.type !== 'text' || child.mode) { kept.push(child); continue; }
-    const collapsed = child.text.replace(/\s+/g, ' ');
+    const collapsed = child.text.replace(WHITESPACE_RUN, ' ');
     if (block) {
-      if (collapsed.trim() !== '') kept.push({ ...child, text: collapsed.trim() });
+      const trimmed = trimModel(collapsed);
+      if (trimmed !== '') kept.push({ ...child, text: trimmed });
       continue;
     }
     if (collapsed === ' ') {
@@ -242,7 +255,7 @@ export function emitBlock(node, depth, out) {
   if (name === 'style' || name === 'script') {
     // Emitted at column 0 so the canonical CSS is byte-comparable.
     out.push(`${pad}${open}`);
-    const body = (node.children || []).map((c) => c.text ?? '').join('').replace(/\s+$/, '');
+    const body = (node.children || []).map((c) => c.text ?? '').join('').replace(TRIM_END, '');
     for (const line of body.split('\n')) out.push(line);
     out.push(`</${name}>`);
     return;
