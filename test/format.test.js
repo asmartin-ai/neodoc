@@ -132,6 +132,18 @@ test('image dimensions are kept as written, whatever their unit', () => {
   assert.match(fmt('<p><img src="a.png" alt="b" width="x"></p>'), /width="x"/, 'even an unreadable value is content');
 });
 
+test('a block start tag closes an open paragraph, as a browser would', () => {
+  // `<p>a<figcaption>b` used to nest, so the caption ended up inside the paragraph.
+  assert.deepEqual(bodyOf(fmt('<body><p>a<figcaption>b</figcaption></p></body>')), [
+    '    <p>a</p>',
+    '    <figcaption>b</figcaption>',
+  ]);
+  assert.deepEqual(bodyOf(fmt('<body><p>a<details>b</details></p></body>')), [
+    '    <p>a</p>',
+    '    <details>b</details>',
+  ]);
+});
+
 test('unknown attributes are kept, behaviour and presentation are dropped', () => {
   // docs/SPEC.md §4.6: content we do not understand is still content, so an
   // unknown attribute survives `fmt` (and `lint` reports it, unfixable). An event

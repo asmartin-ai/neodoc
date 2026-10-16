@@ -10,8 +10,13 @@ const RAW_TEXT = new Set(['style', 'script', 'pre', 'textarea', 'title']);
 const MODE = { pre: 'pre', style: 'raw', script: 'raw', textarea: 'raw' };
 
 const IMPLIED_END = {
-  p: new Set(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'table',
-    'blockquote', 'pre', 'section', 'aside', 'figure', 'hr', 'head', 'body', 'dl', 'div']),
+  // HTML closes an open `p` before any of its "special" elements (and before `li`/`dd`
+  // /`dt`). Elements outside the vocabulary are kept by `fmt`, so the list includes
+  // the ones a document may carry as unknown elements too.
+  p: new Set(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'dd', 'dt', 'table',
+    'blockquote', 'pre', 'section', 'aside', 'figure', 'figcaption', 'hr', 'head', 'body',
+    'dl', 'div', 'address', 'article', 'center', 'details', 'dialog', 'dir', 'fieldset',
+    'footer', 'form', 'header', 'hgroup', 'main', 'menu', 'nav', 'search', 'summary']),
   li: new Set(['li']),
   td: new Set(['td', 'th', 'tr', 'thead', 'tbody', 'tfoot']),
   th: new Set(['td', 'th', 'tr', 'thead', 'tbody', 'tfoot']),
