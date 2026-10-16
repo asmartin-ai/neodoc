@@ -168,7 +168,10 @@ function linesOf(node) {
 function fragmentSource(flags) {
   if (flags.md !== undefined && flags.md !== true) return markdown(flags.md);
   if (flags.html !== undefined) return normalizeFragment(String(flags.html));
-  if (flags.file) return maybeMarkdown(readFileSync(flags.file, 'utf8'), flags.md === true);
+  if (flags.file) {
+    const text = flags.file === '-' ? readFileSync(0, 'utf8') : readFileSync(String(flags.file), 'utf8');
+    return maybeMarkdown(text, flags.md === true);
+  }
   if (flags.stdin) return maybeMarkdown(readFileSync(0, 'utf8'), flags.md === true);
   throw new Error('needs one of --md, --html, --file, --stdin');
 }
@@ -230,15 +233,18 @@ function cmdLint(args) {
 
 function cmdNew(args) {
   const file = args.positional[0];
-  const title = String(args.flags.title ?? (file ? stripExt(basename(file)) : 'Untitled'));
-  const nodes = args.flags.stdin
+  const fromStdin = args.flags.stdin || file === '-';
+  const nodes = fromStdin
     ? markdown(readFileSync(0, 'utf8')).nodes
     : [
-      { type: 'element', name: 'h1', attrs: {}, children: [{ type: 'text', text: title }] },
+      { type: 'element', name: 'h1', attrs: {}, children: [{ type: 'text', text: 'Untitled' }] },
       { type: 'element', name: 'p', attrs: {}, children: [] },
     ];
+  const fallbackTitle = (fromStdin ? firstHeadingText(nodes) : null)
+    ?? (file && file !== '-' ? stripExt(basename(file)) : 'Untitled');
+  const title = String(args.flags.title ?? fallbackTitle);
   const doc = { ...fragmentDoc(nodes, title), file: file ?? '-', reformatted: false };
-  if (!file) { process.stdout.write(serialize(doc.root)); return 0; }
+  if (!file || file === '-') { process.stdout.write(serialize(doc.root)); return 0; }
   saveDoc(doc);
   return 0;
 }
@@ -388,6 +394,13 @@ function foldChanges(args, mode) {
   const doc = openDoc(file);
   const apply = mode === 'accept' ? acceptChanges : rejectChanges;
   const counts = apply(doc.html, selector);
+  const total = (counts.ins ?? 0) + (counts.del ?? 0);
+  if (total === 0) {
+    // Nothing to fold: do not rewrite (and reformat) the file, and say so with the
+    // documented no-match exit code, so a typo in SELECTOR cannot look like success.
+    out(`${mode}: no tracked changes matched${selector ? ` ${selector}` : ''}`);
+    return 1;
+  }
   saveDoc(doc);
   out(`${mode}ed ${counts.ins ?? 0} insertion(s) and ${counts.del ?? 0} deletion(s)`);
   return 0;
