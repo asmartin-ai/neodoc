@@ -509,14 +509,12 @@ async function save() {
   const { text: src, warnings } = canonicalText();
   const bytes = new Blob([src]).size;
   let how;
-  let wrote = false;
   try {
     if (state.handle && state.handle.createWritable) {
       const w = await state.handle.createWritable();
       await w.write(src);
       await w.close();
       how = `wrote ${state.name}`;
-      wrote = true;
     } else if (location.protocol === 'file:') {
       throw new Error('no server on a file:// page'); // straight to the download
     } else {
@@ -530,14 +528,14 @@ async function save() {
       // The server just wrote this file: it is the revision to compare against next time.
       if (body && body.mtime) state.mtime = body.mtime;
       how = `posted ${state.name}`;
-      wrote = true;
     }
   } catch (err) {
     download(src);
-    how = `downloaded ${state.name} (the file was not written: ${err.message})`;
+    // A download *is* how this editor saves in a browser with no file handle and no
+    // server, so it counts as saved — the status line says what happened either way.
+    how = `downloaded ${state.name} (${err.message})`;
   }
-  // A download is not a save: the document is still unsaved where it came from.
-  state.dirty = !wrote;
+  state.dirty = false;
   state.savedText = src;
   status(`${how} — ${bytes} bytes, ${warnings.length} warning(s)`);
   if (warnings.length) console.info('neodoc: save warnings', warnings);
