@@ -94,6 +94,38 @@ test('forbidden and unknown constructs are kept (never destroyed) and linted', (
   assert.equal(lint(out).filter((f) => f.rule === 'format').length, 0);
 });
 
+test('head content outside the model is kept, never deleted', () => {
+  // docs/SPEC.md §4.6: script content passes through untouched, and content we do
+  // not understand is still content. Dropping it was a silent `fmt -w` data loss.
+  const out = fmt('<!doctype html><html><head><title>t</title><script>var a=1;</script><p>KEPT</p></head>'
+    + '<body><p>x</p></body></html>');
+  assert.match(out, /<script>\nvar a=1;\n<\/script>/);
+  assert.match(out, /<p>KEPT<\/p>/);
+});
+
+test('a title outside the head moves into it; other metadata stays put and is reported', () => {
+  // A misplaced <title> is the document's name, and a browser relocates it too. The
+  // bug this guards: the head got an empty <title> while the real one stayed in the
+  // body, so every reader of the file saw no title at all.
+  const moved = fmt('<!doctype html><html><head><meta charset="utf-8"></head>'
+    + '<body><title>Real</title><p>x</p></body></html>');
+  assert.match(moved, /<head>[\s\S]*<title>Real<\/title>[\s\S]*<\/head>/);
+  assert.equal(moved.split('<body>')[1].includes('<title>'), false);
+  // With a title already in the head, the first one in document order wins, as in a
+  // browser: the head's own comes first.
+  const both = fmt('<!doctype html><html><head><title>Head</title></head><body><title>Body</title><p>x</p></body></html>');
+  assert.match(both, /<title>Head<\/title>/);
+  assert.equal(both.includes('<title>Body</title>'), false);
+
+  // style/link/base/meta stay where they are: the editor refuses to load a document
+  // containing one, which it could not do if fmt had promoted it into the head.
+  const style = '<!doctype html><html data-neodoc="1" lang="en"><head><meta charset="utf-8"><title>t</title>'
+    + '<meta content="neodoc 1.0.0" name="generator"></head><body><style>p{}</style><p>x</p></body></html>';
+  const findings = lint(style).filter((f) => f.rule === 'misplaced-head');
+  assert.deepEqual(findings.map((f) => f.fixable), [false], 'fmt does not move a body <style>');
+  assert.match(fmt(style, { style: 'none' }).split('<body>')[1], /<style>/, 'a body <style> stays in the body');
+});
+
 test('unknown attributes are kept, behaviour and presentation are dropped', () => {
   // docs/SPEC.md §4.6: content we do not understand is still content, so an
   // unknown attribute survives `fmt` (and `lint` reports it, unfixable). An event

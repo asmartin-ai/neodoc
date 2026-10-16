@@ -31,6 +31,17 @@ export const VOCAB = new Set([
 
 export const GLOBAL_ATTRS = new Set(['id', 'title', 'lang', 'dir']);
 
+/** Metadata elements that belong in `<head>` and nowhere else (docs/SPEC.md §3).
+ *  `lint` reports them anywhere else. */
+export const HEAD_ONLY = new Set(['title', 'meta', 'style', 'link', 'base']);
+
+/** Of those, the ones `fmt` relocates into `<head>`: a `<title>` is the document's
+ *  name, and a browser moves it there too. `style`/`link`/`base`/`meta` in a body
+ *  are forbidden constructs that `fmt` leaves exactly where they are — the editor
+ *  refuses to load a document containing them, which it could not do if `fmt` had
+ *  quietly promoted them into the head. */
+export const HEAD_MOVED = new Set(['title']);
+
 export const ATTRS = {
   a: new Set(['href', 'target', 'rel']),
   img: new Set(['src', 'alt', 'width', 'height']),

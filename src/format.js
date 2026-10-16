@@ -9,7 +9,7 @@
 import { parse } from './parse.js';
 import { THEME_CSS } from './theme.js';
 import { GENERATOR } from './version.js';
-import { RENAMES, VOID, hasBlockChild, isDroppedAttr, isEmptyInline } from './tree.js';
+import { HEAD_MOVED, RENAMES, VOID, hasBlockChild, isDroppedAttr, isEmptyInline } from './tree.js';
 import { escapeText, escapeAttr } from './entities.js';
 
 export const INDENT = '  ';
@@ -185,12 +185,21 @@ export function normalizeDocument(root, warnings = [], opts = {}) {
   const oldHead = html.children.find((c) => c.name === 'head') ?? looseHead;
   const oldBody = html.children.find((c) => c.name === 'body') ?? looseBody;
   const stray = html.children.filter((c) => c.name !== 'head' && c.name !== 'body');
-  const head = normalizeHead(normalizeChildren(oldHead ? oldHead.children : [], 'head', warnings), warnings, opts);
+  // A `<title>` written outside `<head>` belongs in the head, not in the body where
+  // it would silently become body text (and leave the document with no title).
+  const outside = [...stray, ...rest];
+  const bodyContent = [...(oldBody ? oldBody.children : []), ...outside];
+  const displaced = bodyContent.filter(isHeadOnly);
+  const remainder = bodyContent.filter((c) => !isHeadOnly(c));
+  for (const c of displaced) warnings.push(`moved <${c.name}> into <head>`);
+  const head = normalizeHead(
+    normalizeChildren([...(oldHead ? oldHead.children : []), ...displaced], 'head', warnings), warnings, opts,
+  );
   const body = {
     type: 'element',
     name: 'body',
     attrs: oldBody ? oldBody.attrs : {},
-    children: normalizeChildren([...(oldBody ? oldBody.children : []), ...stray, ...rest], 'body', warnings),
+    children: normalizeChildren(remainder, 'body', warnings),
   };
   if (html.attrs['data-neodoc'] !== '1') { html.attrs['data-neodoc'] = '1'; warnings.push('set data-neodoc="1"'); }
   if (!html.attrs.lang) { html.attrs.lang = 'en'; warnings.push('added lang="en"'); }
@@ -199,11 +208,14 @@ export function normalizeDocument(root, warnings = [], opts = {}) {
   return root;
 }
 
+const isHeadOnly = (node) => node.type === 'element' && HEAD_MOVED.has(RENAMES[node.name] || node.name);
+
 const HEAD_ORDER = ['author', 'date', 'description', 'keywords'];
 const metaRank = (name) => (name === 'generator' ? 2 : HEAD_ORDER.includes(name) ? 0 : 1);
 
 function normalizeHead(children, warnings, opts) {
   const metas = [];
+  const extra = [];
   let title = null;
   for (const child of children) {
     if (child.name === 'title') {
@@ -218,8 +230,11 @@ function normalizeHead(children, warnings, opts) {
       if (opts.style !== 'none' && String(child.children?.[0]?.text ?? '').trim() !== THEME_CSS.trim()) {
         warnings.push('replaced the <style> block with the canonical stylesheet');
       }
+    } else if (child.type === 'element') {
+      warnings.push(`kept <${child.name}> in <head>, which is not part of the vocabulary`);
+      extra.push(child);
     } else {
-      warnings.push(`dropped <${child.name}> from <head>`);
+      warnings.push('dropped non-element content from <head>');
     }
   }
   if (!title) { title = { type: 'element', name: 'title', attrs: {}, children: [] }; warnings.push('added missing <title>'); }
@@ -236,6 +251,7 @@ function normalizeHead(children, warnings, opts) {
   if (opts.style !== 'none') {
     headChildren.push({ type: 'element', name: 'style', attrs: {}, children: [{ type: 'text', text: THEME_CSS, mode: 'raw' }] });
   }
+  headChildren.push(...extra);
   return { type: 'element', name: 'head', attrs: {}, children: headChildren };
 }
 

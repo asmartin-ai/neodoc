@@ -170,6 +170,17 @@ const VOCAB = new Set([
 
 const GLOBAL_ATTRS = new Set(['id', 'title', 'lang', 'dir']);
 
+/** Metadata elements that belong in `<head>` and nowhere else (docs/SPEC.md §3).
+ *  `lint` reports them anywhere else. */
+const HEAD_ONLY = new Set(['title', 'meta', 'style', 'link', 'base']);
+
+/** Of those, the ones `fmt` relocates into `<head>`: a `<title>` is the document's
+ *  name, and a browser moves it there too. `style`/`link`/`base`/`meta` in a body
+ *  are forbidden constructs that `fmt` leaves exactly where they are — the editor
+ *  refuses to load a document containing them, which it could not do if `fmt` had
+ *  quietly promoted them into the head. */
+const HEAD_MOVED = new Set(['title']);
+
 const ATTRS = {
   a: new Set(['href', 'target', 'rel']),
   img: new Set(['src', 'alt', 'width', 'height']),
@@ -305,7 +316,7 @@ function parentOf(root, target) {
   return null;
 }
 
-__mods["src/tree"] = {VOID, RAW, INLINE, HEADINGS, BLOCK, VOCAB, GLOBAL_ATTRS, ATTRS, isAttrAllowed, DROP_ATTRS, isDroppedAttr, RENAMES, hasBlockChild, isEmptyInline, el, txt, cmt, isEl, isText, isComment, textOf, walk, descendants, childrenOf, findById, clone, pathOf, parentOf};
+__mods["src/tree"] = {VOID, RAW, INLINE, HEADINGS, BLOCK, VOCAB, GLOBAL_ATTRS, HEAD_ONLY, HEAD_MOVED, ATTRS, isAttrAllowed, DROP_ATTRS, isDroppedAttr, RENAMES, hasBlockChild, isEmptyInline, el, txt, cmt, isEl, isText, isComment, textOf, walk, descendants, childrenOf, findById, clone, pathOf, parentOf};
 })();
 
 await (async function () {
@@ -2820,7 +2831,7 @@ await (async function () {
 const {parse} = __mods["src/parse"];
 const {THEME_CSS} = __mods["src/theme"];
 const {GENERATOR} = __mods["src/version"];
-const {RENAMES, VOID, hasBlockChild, isDroppedAttr, isEmptyInline} = __mods["src/tree"];
+const {HEAD_MOVED, RENAMES, VOID, hasBlockChild, isDroppedAttr, isEmptyInline} = __mods["src/tree"];
 const {escapeText, escapeAttr} = __mods["src/entities"];
 const INDENT = '  ';
 
@@ -2995,12 +3006,21 @@ function normalizeDocument(root, warnings = [], opts = {}) {
   const oldHead = html.children.find((c) => c.name === 'head') ?? looseHead;
   const oldBody = html.children.find((c) => c.name === 'body') ?? looseBody;
   const stray = html.children.filter((c) => c.name !== 'head' && c.name !== 'body');
-  const head = normalizeHead(normalizeChildren(oldHead ? oldHead.children : [], 'head', warnings), warnings, opts);
+  // A `<title>` written outside `<head>` belongs in the head, not in the body where
+  // it would silently become body text (and leave the document with no title).
+  const outside = [...stray, ...rest];
+  const bodyContent = [...(oldBody ? oldBody.children : []), ...outside];
+  const displaced = bodyContent.filter(isHeadOnly);
+  const remainder = bodyContent.filter((c) => !isHeadOnly(c));
+  for (const c of displaced) warnings.push(`moved <${c.name}> into <head>`);
+  const head = normalizeHead(
+    normalizeChildren([...(oldHead ? oldHead.children : []), ...displaced], 'head', warnings), warnings, opts,
+  );
   const body = {
     type: 'element',
     name: 'body',
     attrs: oldBody ? oldBody.attrs : {},
-    children: normalizeChildren([...(oldBody ? oldBody.children : []), ...stray, ...rest], 'body', warnings),
+    children: normalizeChildren(remainder, 'body', warnings),
   };
   if (html.attrs['data-neodoc'] !== '1') { html.attrs['data-neodoc'] = '1'; warnings.push('set data-neodoc="1"'); }
   if (!html.attrs.lang) { html.attrs.lang = 'en'; warnings.push('added lang="en"'); }
@@ -3009,11 +3029,14 @@ function normalizeDocument(root, warnings = [], opts = {}) {
   return root;
 }
 
+const isHeadOnly = (node) => node.type === 'element' && HEAD_MOVED.has(RENAMES[node.name] || node.name);
+
 const HEAD_ORDER = ['author', 'date', 'description', 'keywords'];
 const metaRank = (name) => (name === 'generator' ? 2 : HEAD_ORDER.includes(name) ? 0 : 1);
 
 function normalizeHead(children, warnings, opts) {
   const metas = [];
+  const extra = [];
   let title = null;
   for (const child of children) {
     if (child.name === 'title') {
@@ -3028,8 +3051,11 @@ function normalizeHead(children, warnings, opts) {
       if (opts.style !== 'none' && String(child.children?.[0]?.text ?? '').trim() !== THEME_CSS.trim()) {
         warnings.push('replaced the <style> block with the canonical stylesheet');
       }
+    } else if (child.type === 'element') {
+      warnings.push(`kept <${child.name}> in <head>, which is not part of the vocabulary`);
+      extra.push(child);
     } else {
-      warnings.push(`dropped <${child.name}> from <head>`);
+      warnings.push('dropped non-element content from <head>');
     }
   }
   if (!title) { title = { type: 'element', name: 'title', attrs: {}, children: [] }; warnings.push('added missing <title>'); }
@@ -3046,6 +3072,7 @@ function normalizeHead(children, warnings, opts) {
   if (opts.style !== 'none') {
     headChildren.push({ type: 'element', name: 'style', attrs: {}, children: [{ type: 'text', text: THEME_CSS, mode: 'raw' }] });
   }
+  headChildren.push(...extra);
   return { type: 'element', name: 'head', attrs: {}, children: headChildren };
 }
 

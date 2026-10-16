@@ -22,8 +22,9 @@ neodoc css                                     # print the canonical stylesheet
 ```
 
 `lint --json` → `{"ok":bool,"findings":[{"file","line","severity","rule","message","fixable"}]}`.
-Rules: `parse`, `vocab`, `attr`, `required-attr`, `id-duplicate`, `comment-anchor`,
-`comment`, `link-target`, `section-heading`, `title`, `body`, `timestamp`, `format`.
+Rules: `parse`, `vocab`, `attr`, `required-attr`, `id-duplicate`, `misplaced-head`,
+`comment-anchor`, `comment`, `link-target`, `section-heading`, `title`, `body`,
+`timestamp`, `invisible-char`, `format`.
 
 ## Reading and editing by selector
 

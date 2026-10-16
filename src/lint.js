@@ -3,7 +3,7 @@
 
 import { formatTree } from './format.js';
 import { parse } from './parse.js';
-import { descendants, isAttrAllowed, isDroppedAttr, isEl, RENAMES, VOCAB } from './tree.js';
+import { descendants, HEAD_MOVED, HEAD_ONLY, isAttrAllowed, isDroppedAttr, isEl, RENAMES, VOCAB } from './tree.js';
 
 const REQUIRED_ATTRS = { img: ['src', 'alt'] };
 
@@ -39,18 +39,21 @@ export function lint(text) {
   let title = false;
   let body = null;
   let head = null;
+  const headOnly = []; // checked after the walk, when <head> is known
 
   for (const node of [root, ...descendants(root)]) {
     if (node.type === 'comment' && /--/.test(node.text)) add(at(node.pos ?? 0), 'comment', 'HTML comment contains "--"');
     if (node.type === 'text' && /[\u200B\uFEFF]/.test(node.text)) {
       // Never legitimate in prose, and invisible in a diff. The editor's own caret
       // anchors are stripped before saving, so this means something else put them there.
-      add(at(node.pos ?? 0), 'invisible-char', 'invisible zero-width character (U+200B/U+FEFF)', true, 'warning');
+      // \`fmt\` keeps it (it is content), so this is not something --fix can repair.
+      add(at(node.pos ?? 0), 'invisible-char', 'invisible zero-width character (U+200B/U+FEFF)', false, 'warning');
     }
     if (node.type !== 'element') continue;
     const line = at(node.pos ?? 0);
     const name = RENAMES[node.name] || node.name;
     if (name === 'title') title = true;
+    if (HEAD_ONLY.has(name)) headOnly.push([node, line]);
     if (name === 'body') body = node;
     if (name === 'head') head = node;
     if (name === '#root' || !VOCAB.has(name)) {
@@ -80,6 +83,15 @@ export function lint(text) {
     if (name === 'section' && !node.children.some((c) => isEl(c, 'h1') || isEl(c, 'h2') || isEl(c, 'h3'))) {
       add(line, 'section-heading', '<section> has no heading', false, 'warning');
     }
+  }
+
+  // `title`/`meta`/`style`/`link`/`base` outside <head> are reported, and `fmt`
+  // moves them into the head rather than leaving them as body text (SPEC §3).
+  const inHead = new Set(head ? [head, ...descendants(head)] : []);
+  for (const [node, line] of headOnly) {
+    // Only a misplaced <title> is repaired by `fmt`; the rest are kept where they
+    // are and reported, so they must not be advertised as fixable.
+    if (!inHead.has(node)) add(line, 'misplaced-head', `<${node.name}> belongs in <head>`, HEAD_MOVED.has(node.name));
   }
 
   for (const id of anchors) if (!ids.has(id)) add(1, 'link-target', `href="#${id}" has no matching id`);
