@@ -66,3 +66,19 @@ test('`get --json` reports ok:false when nothing matched', () => {
   assert.equal(res.status, 1);
   assert.equal(JSON.parse(res.stdout).ok, false, 'ok must agree with the exit code');
 });
+
+test('`note rm` on an unknown id is an error and does not rewrite the file', () => {
+  const file = tmpFile('doc.nd.html', DOC);
+  const before = readFileSync(file, 'utf8');
+  const res = cli(['note', 'rm', file, 'nosuch']);
+  assert.equal(res.status, 2, 'note done/reply already fail on an unknown id');
+  assert.equal(readFileSync(file, 'utf8'), before, 'a no-op must not rewrite the file');
+});
+
+test('`note rm` removes a thread it does find', () => {
+  const file = tmpFile('doc.nd.html', DOC);
+  assert.equal(cli(['note', 'add', file, 'body > p', '--say', 'why?']).status, 0);
+  const id = /^(\S+)/.exec(cli(['note', 'ls', file]).stdout)[1];
+  assert.equal(cli(['note', 'rm', file, id]).status, 0, 'a real id still removes the thread');
+  assert.doesNotMatch(readFileSync(file, 'utf8'), /data-thread/);
+});

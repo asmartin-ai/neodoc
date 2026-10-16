@@ -374,7 +374,12 @@ function cmdNote(args) {
   if (sub === 'reply') replyToComment(doc.html, id, { text: String(args.flags.say ?? ''), author, at });
   else if (sub === 'done') resolveComment(doc.html, id, true);
   else if (sub === 'undo') resolveComment(doc.html, id, false);
-  else if (sub === 'rm') removeComment(doc.html, id);
+  else if (sub === 'rm') {
+    const dropped = removeComment(doc.html, id);
+    // `note done`/`reply` throw for an unknown id; `rm` used to succeed silently and
+    // rewrite (and reformat) the file for a typo.
+    if (!dropped.marks && !dropped.threads) throw new Error(`no comment thread ${id}`);
+  }
   else return fail(`note: unknown subcommand "${sub}"`);
   saveDoc(doc);
   return 0;
