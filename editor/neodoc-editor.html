@@ -5239,6 +5239,7 @@ function mutate(fn) {
     applyDocument(next);
     state.dirty = true;
     refresh();
+    refreshComments();
     restoreCaret(keep);
   }
   return result;
@@ -5262,6 +5263,7 @@ async function openText(name, src, handle = null) {
   state.undo.length = 0;
   state.savedText = canonical;
   applyDocument(canonical);
+  refreshComments();
   const note = canonical === src ? 'already canonical' : 'rewritten to canonical form';
   status(`opened ${state.name} (${note}, ${warnings.length} warning(s))`);
   if (warnings.length) console.info('neodoc: format warnings', warnings);
@@ -5360,21 +5362,23 @@ function liveTree() {
 function liveSelector(el) {
   const parts = [];
   for (let n = el; n && n !== document.body; n = n.parentNode) {
+    // Inside a `<template>`'s content fragment there is no addressable path.
+    if (n.nodeType !== 1) return 'body';
     const sibs = [...n.parentNode.children].filter((c) => c !== CHROME);
     const sameTag = sibs.filter((c) => c.nodeName === n.nodeName);
     let seg = n.nodeName.toLowerCase();
     // Same rule as src/tree.js `pathOf`: a tag that occurs once among its element
     // siblings needs no positional suffix, so the hint matches `neodoc get --json`.
-    // `#id` only when it addresses exactly this node and parses as a selector: a
-    // duplicated or awkward id would make the printed command edit the wrong element.
+    // `#id` only when it addresses exactly this node: a duplicated or awkward id would
+    // make the printed command edit the wrong element. What this builds
+    // (`body > tag#id:nth-of-type(n)`) is always something the selector engine can run,
+    // so there is nothing to validate — and validating would parse the document.
     const unique = n.id && /^[A-Za-z_][-\w]*$/.test(n.id) && document.querySelectorAll(`#${n.id}`).length === 1;
     if (unique) seg += `#${n.id}`;
     else if (sameTag.length > 1) seg += `:nth-of-type(${sameTag.indexOf(n) + 1})`;
     parts.unshift(seg);
   }
-  const sel = ['body', ...parts].join(' > ');
-  const body = liveTree().root.children[0];
-  try { return query(body, sel) ? sel : 'body'; } catch { return 'body'; }
+  return ['body', ...parts].join(' > ');
 }
 
 // ---------------------------------------------------------------- input rules
@@ -6220,19 +6224,27 @@ async function openFile() {
 
 // ---------------------------------------------------------------------- status
 
+/**
+ * Update the chrome that depends on the live DOM. Runs on every keystroke (and on every
+ * selection change), so it must not parse the document: SPEC §9 wants typing to be O(1).
+ * Counting the body's blocks and walking up from the caret are both DOM reads.
+ */
 function refresh() {
-  const { root } = liveTree();
-  const body = root.children[0];
-  $('#st-blocks').textContent = `${(body ? body.children.filter((c) => c.type === 'element') : []).length} blocks`;
+  $('#st-blocks').textContent = `${blocksInBody().length} blocks`;
   const sel = caretRange();
   const block = sel ? blockOf(sel.startContainer) : null;
   const path = block ? liveSelector(block) : 'body';
   $('#st-sel').textContent = path;
   $('#st-cli').textContent = `neodoc get ${state.name} '${path}'`;
-  const threads = renderThreads();
-  $('#st-comments').textContent = `${threads.filter((t) => t.state !== 'resolved').length} comments`;
   $('#st-dirty').textContent = state.dirty ? 'unsaved' : 'saved';
   $('#st-dirty').dataset.dirty = String(state.dirty);
+}
+
+/** The comment sidebar and its count: these need the tree, so only when it can have
+ *  changed — opening a document, or running a command. */
+function refreshComments() {
+  const threads = renderThreads();
+  $('#st-comments').textContent = `${threads.filter((t) => t.state !== 'resolved').length} comments`;
 }
 
 // ------------------------------------------------------------------------ wire
@@ -6346,6 +6358,7 @@ if ((await loadServed()) === false) {
 }
 if (!blocksInBody().length) document.body.prepend(h('p'));
 refresh();
+refreshComments();
 // A document's links are content, but an executable scheme navigates or runs in
 // this page rather than opening somewhere else.
 document.addEventListener('click', (e) => {
