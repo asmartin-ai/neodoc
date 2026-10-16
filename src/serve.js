@@ -122,6 +122,8 @@ async function handle(req, res, ctx) {
 
 async function doc(req, res, ctx) {
   const bytes = await readFile(ctx.target);
+  // The editor sends this back on save, so a CLI write during the edit is not reverted.
+  const mtime = await stat(ctx.target).then((s) => s.mtimeMs).catch(() => null);
   const text = bytes.toString('utf8');
   // The editor writes back what it was served, so serving a decode that already lost
   // bytes (U+FFFD in place of whatever they were) would destroy them on the next
@@ -135,6 +137,7 @@ async function doc(req, res, ctx) {
     path: '',
     name: basename(ctx.target),
     mode: /<style[\s>]/i.test(text) ? 'inline' : 'none',
+    mtime,
     text,
   }), { 'content-type': TYPES['.json'] });
 }
@@ -143,6 +146,17 @@ async function doc(req, res, ctx) {
  *  client cannot name a different file (or a file outside the document's tree). */
 async function save(req, res, ctx) {
   if (Number(req.headers['content-length'] ?? 0) > MAX_SAVE) return send(res, 413, 'document too large');
+  // The page tells us which revision it edited. Without this a `neodoc set` run while the
+  // editor was open was silently reverted by the editor's next save.
+  const seen = Number(req.headers['x-neodoc-mtime']);
+  if (Number.isFinite(seen) && seen > 0) {
+    const now = await stat(ctx.target).then((s) => s.mtimeMs).catch(() => null);
+    if (now !== null && Math.abs(now - seen) > 0.5) {
+      return send(res, 409, JSON.stringify({
+        error: 'the file changed on disk since this page loaded it — reload before saving',
+      }), { 'content-type': TYPES['.json'] });
+    }
+  }
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {

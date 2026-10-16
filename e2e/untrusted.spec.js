@@ -178,3 +178,22 @@ test('a script inside a <template> is still executable content here', async ({ p
   expect(await page.evaluate(() => document.body.querySelectorAll('script').length)).toBe(0);
   expectClean(noise);
 });
+
+test('a document file that is not UTF-8 is refused, not repaired', async ({ page }) => {
+  const dir = await tmpDir();
+  const file = join(dir, 'latin1.nd.html');
+  // One raw 0xE9: `File.text()` turns it into U+FFFD and Save would write that back.
+  await writeFile(file, Buffer.concat([
+    Buffer.from('<!doctype html>\n<html data-neodoc="1" lang="en">\n  <head><meta charset="utf-8"><title>t</title></head>\n  <body><p>caf'),
+    Buffer.from([0xe9]),
+    Buffer.from('</p></body>\n</html>\n'),
+  ]));
+  const noise = watchPage(page);
+
+  await page.goto(SERVERLESS_EDITOR);
+  await page.waitForFunction(() => !!window.neodocEditor);
+  await page.setInputFiles('#open-input', file);
+  await expect(page.locator('#st-state')).toContainText(/not valid UTF-8/i);
+  expect(await page.evaluate(() => document.body.textContent)).not.toContain('caf');
+  expectClean(noise);
+});

@@ -4882,7 +4882,7 @@ function unsafeHeadElements(root) {
 
 const state = {
   name: 'untitled.nd.html', mode: 'inline', dirty: false, handle: null, suggest: false,
-  embed: true, undo: [], savedText: '',
+  embed: true, undo: [], savedText: '', mtime: 0,
 };
 
 // An entry is a copy of the whole document, so the history is bounded by bytes.
@@ -5041,6 +5041,21 @@ function canonicalText() {
     body.append(CHROME);
   }
   return format(html, { style: state.mode });
+}
+
+/**
+ * Read a document file, refusing bytes that are not UTF-8. `File.text()` decodes with
+ * U+FFFD for every bad byte and Save would write those back, which is why the CLI refuses
+ * such files (`readText`) and `serve` answers 415.
+ */
+async function readDocFile(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    status(`refused ${file.name}: not valid UTF-8 — saving it from here would replace those bytes`);
+    return null;
+  }
 }
 
 /** Show canonical text: the document's head and body replace the live ones. */
@@ -5267,6 +5282,7 @@ async function loadServed() {
     }
     const doc = await res.json();
     state.mode = doc.mode === 'none' ? 'none' : 'inline';
+    state.mtime = doc.mtime ?? 0;
     await openText(doc.name, doc.text);
     return true;
   } catch { return false; }
@@ -5296,10 +5312,15 @@ async function save() {
     } else if (location.protocol === 'file:') {
       throw new Error('no server on a file:// page'); // straight to the download
     } else {
-      const res = await fetch(`/save?path=${encodeURIComponent(state.name)}`, {
-        method: 'POST', body: src, headers: { 'content-type': 'text/html;charset=utf-8' },
-      });
-      if (!res.ok) throw new Error(`POST /save -> ${res.status}`);
+      // `x-neodoc-mtime` lets the server refuse a save that would revert someone else's
+      // write; without it (a page that never loaded through the server) it is simply absent.
+      const headers = { 'content-type': 'text/html;charset=utf-8' };
+      if (state.mtime) headers['x-neodoc-mtime'] = String(state.mtime);
+      const res = await fetch(`/save?path=${encodeURIComponent(state.name)}`, { method: 'POST', body: src, headers });
+      if (!res.ok) {
+        const why = res.headers.get('content-type')?.includes('json') ? (await res.json()).error : null;
+        throw new Error(why || `POST /save -> ${res.status}`);
+      }
       how = `posted ${state.name}`;
     }
   } catch (err) {
@@ -6231,7 +6252,10 @@ $('#chrome').addEventListener('click', (e) => {
 $('#embed').addEventListener('change', (e) => { state.embed = e.target.checked; });
 $('#open-input').addEventListener('change', async (e) => {
   const file = e.target.files[0];
-  if (file) await openText(file.name, await file.text());
+  if (file) {
+    const text = await readDocFile(file);
+    if (text !== null) await openText(file.name, text);
+  }
   e.target.value = '';
 });
 $('#image-input').addEventListener('change', async (e) => {
@@ -6308,7 +6332,10 @@ document.addEventListener('drop', async (e) => {
   const image = files.find((f) => f.type.startsWith('image/'));
   if (image) return insertImage(image);
   const doc = files.find((f) => DOC_NAME.test(f.name));
-  if (doc) await openText(doc.name, await doc.text());
+  if (doc) {
+    const text = await readDocFile(doc);
+    if (text !== null) await openText(doc.name, text);
+  }
 });
 
 // ------------------------------------------------------------------------ boot

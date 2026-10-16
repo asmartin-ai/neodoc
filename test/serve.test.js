@@ -78,3 +78,30 @@ test('the loopback Host allow-list accepts a bracketed IPv6 form with a port', a
   assert.equal(await status(`127.0.0.1:${port}`), 200);
   assert.equal(await status(`evil.example:${port}`), 403);
 });
+
+test('a save that would revert a change made outside the editor is refused', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'neodoc-serve-'));
+  const file = join(dir, 'doc.nd.html');
+  writeFileSync(file, format('<!doctype html><html><head><title>x</title></head><body><p>hi</p></body></html>', { style: 'none' }).text);
+  const server = await serve({ file, port: 0 });
+  t.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address().port}`;
+
+  const doc = await (await fetch(`${base}/doc`)).json();
+  assert.ok(doc.mtime > 0, '/doc reports the revision the page edited');
+
+  // Someone else writes the file (the CLI would), so the page's revision is stale.
+  await new Promise((r) => setTimeout(r, 10));
+  writeFileSync(file, format('<!doctype html><html><head><title>x</title></head><body><p>changed by the cli</p></body></html>', { style: 'none' }).text);
+
+  const stale = await fetch(`${base}/save`, {
+    method: 'POST', body: '<!doctype html>\n', headers: { 'x-neodoc-mtime': String(doc.mtime), origin: base },
+  });
+  assert.equal(stale.status, 409, 'the editor must not silently revert that write');
+  assert.match((await stale.json()).error, /changed on disk/);
+
+  const fresh = await fetch(`${base}/save`, {
+    method: 'POST', body: '<!doctype html>\n', headers: { origin: base },
+  });
+  assert.equal(fresh.status, 200, 'a save with no revision (an older page) still works');
+});
