@@ -8,7 +8,12 @@ or docx.
 The format is defined by the **canonical serialization** (§4). Two byte-identical
 files have the same meaning; `neodoc fmt` is the canonicalizer and is idempotent.
 
-- File naming convention: `*.nd.html` (any name works; detection is by `data-neodoc`).
+- File naming convention: **`*.nd.html`** (`report.nd.html`). `*.ndoc.html` and
+  `*.ndoc` are accepted when reading and when deriving names, but `.html` stays the
+  **last** extension on purpose: browsers and static hosts pick the media type from
+  the last extension, so a document opens and renders everywhere with no server, no
+  MIME configuration and no JavaScript. The format's identity is the
+  `data-neodoc` marker plus the `.nd.` infix, not the media type.
 - Media type: `text/html; charset=utf-8`.
 - Encoding: UTF-8, LF line endings, exactly one trailing newline, no tabs, no
   trailing whitespace.
@@ -110,7 +115,10 @@ blocks. No block inside an inline context.
      rule, not a list of exceptions: `<p>a <em>b</em></p>` is one line,
      `<tr><td>a</td><td>b</td></tr>` is three lines, `<ul><li>a</li>…` is
      multi-line, `<td>a</td>` is one line.
-2. **Attribute order** is ascending byte order by attribute name. Attributes are
+2. **Attribute order** is ascending byte order by attribute name. All ordering and
+   comparison in this specification is by UTF-16 code unit, never by locale: the
+   canonical bytes of a document MUST NOT depend on the platform, locale, ICU
+   version or time zone (CI enforces this on Linux, macOS and Windows). Attributes are
    double-quoted, `=`, no spaces: `<img alt="x" src="y">`. Void elements use no
    self-closing slash: `<br>`, `<hr>`, `<img …>`, `<meta …>`.
 3. **Escaping.** Text nodes escape exactly `& < >`. Attribute values escape

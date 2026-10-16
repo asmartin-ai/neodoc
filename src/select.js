@@ -145,6 +145,9 @@ function parseCompound(s, i) {
  * the first part, then `'descendant'` or `'child'`). Throws `Error` on bad syntax.
  */
 export function parseSelector(text) {
+  // This is the selector I/O boundary: reject non-strings here rather than
+  // letting a bad caller fail somewhere inside the matcher.
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- I/O boundary check
   if (typeof text !== 'string') throw new Error('selector must be a string');
   const s = text.trim();
   if (!s) throw new Error('empty selector');
@@ -262,7 +265,7 @@ function hit(node, parents) {
  * duplicates. Each result is `{ node, parent, index }`.
  */
 export function queryAll(root, selectorText) {
-  const sel = typeof selectorText === 'string' ? parseSelector(selectorText) : selectorText;
+  const sel = selectorText && selectorText.groups ? selectorText : parseSelector(selectorText);
   if (!sel || !sel.groups) throw new Error('selector must be a string or parseSelector() result');
   const parents = parentMap(root);
   const out = [];

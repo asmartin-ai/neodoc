@@ -3,7 +3,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { bundle } from '../tools/bundle.js';
+
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 const FILE = new URL('../editor/neodoc-editor.html', import.meta.url).pathname;
 const read = () => readFileSync(FILE, 'utf8');
@@ -22,4 +26,16 @@ test('the bundled editor needs no server and no network', () => {
   for (const id of ['src/tree', 'src/format', 'src/select', 'src/markdown', 'src/comments', 'editor/editor']) {
     assert.ok(script.includes(`__mods["${id}"]`), `${id} missing from the bundle`);
   }
+});
+
+// Regression: `String.replace(pattern, codeString)` expands `$&` and friends found
+// in the *replacement*, which silently spliced a literal script tag into the middle
+// of the bundled module and truncated the page. The bundle must carry source text
+// through byte for byte.
+test('bundling does not expand $-patterns from module source', () => {
+  const html = read();
+  const lines = readFileSync(join(ROOT, 'src/markdown.js'), 'utf8').split('\n').filter((l) => l.includes('$&'));
+  assert.ok(lines.length > 0, 'expected a $-expansion hazard to exist in src/markdown.js');
+  for (const line of lines) assert.ok(html.includes(line), `bundle lost this line: ${line.trim()}`);
+  assert.equal(html.split('<script').length - 1, 1, 'exactly one inline script tag may exist in the page');
 });

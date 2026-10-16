@@ -36,6 +36,8 @@ files once and diff them from then on.
 
 ## Two traps
 
+- **No locale-sensitive ordering.** `localeCompare`, `toLocaleString` and friends
+  produce different bytes on different machines; sort and compare by code unit.
 - **No timestamps or nonces in output.** `meta[name=generator]` carries the
   version only. A port that stamps a date makes every file diff on every write.
 - **Do not use a general HTML serializer** (tidy, a DOM library's `innerHTML`, or

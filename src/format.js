@@ -198,8 +198,10 @@ function normalizeHead(children, warnings, opts) {
     }
   }
   if (!title) { title = { type: 'element', name: 'title', attrs: {}, children: [] }; warnings.push('added missing <title>'); }
+  // Code-unit order, not localeCompare: canonical bytes must not depend on the
+  // machine's locale or ICU version (docs/SPEC.md §4.2).
   metas.sort((a, b) => metaRank(a.attrs.name) - metaRank(b.attrs.name)
-    || a.attrs.name.localeCompare(b.attrs.name));
+    || (a.attrs.name < b.attrs.name ? -1 : a.attrs.name > b.attrs.name ? 1 : 0));
   metas.push({ type: 'element', name: 'meta', attrs: { content: GENERATOR, name: 'generator' }, children: [] });
   const headChildren = [
     { type: 'element', name: 'meta', attrs: { charset: 'utf-8' }, children: [] },

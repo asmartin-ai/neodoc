@@ -1,0 +1,8 @@
+# Neodoc canonical form is UTF-8 with LF endings and no trailing whitespace
+# (docs/SPEC.md §4), so it must survive a Windows checkout unchanged.
+* text=auto eol=lf
+*.nd.html text eol=lf
+*.html text eol=lf
+*.png binary
+*.jpg binary
+*.docx binary

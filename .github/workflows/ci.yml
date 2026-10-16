@@ -1,0 +1,136 @@
+# CI for a format whose whole value is "the same bytes everywhere".
+#
+# Engine coverage, and what it means for browser brands:
+#   chromium  → Chrome, Edge, Brave, Opera, Vivaldi, Arc (Blink + V8)
+#   firefox   → Firefox, LibreWolf, Waterfox, Tor Browser (Gecko)
+#   webkit    → Safari, every browser on iOS, GNOME Web (WebKit)
+#   mobile-*  → Android Blink and iOS WebKit at phone viewports/DPRs
+# Branded and hardened forks share the engine, so behaviour transfers; what does
+# NOT transfer is API availability (Brave shields, Tor hardening, Firefox's
+# missing File System Access API). The `fallbacks` spec covers that by deleting
+# the optional APIs before load and asserting the degraded path works.
+# Not covered here: real devices, OS-level input quirks, and vendor-specific
+# hardening beyond feature detection. Those need a device farm (BrowserStack or
+# similar) with credentials, which this workflow deliberately does not require.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: node ${{ matrix.node }} · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: ['20', '22', '24']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - name: Unit, conformance, CLI and docx tests
+        run: npm test
+      - name: Canonical output is LF-only (a CRLF checkout must not break it)
+        shell: bash
+        run: |
+          node -e '
+            const fs = require("fs");
+            for (const name of fs.readdirSync("fixtures")) {
+              if (!name.endsWith(".nd.html")) continue;
+              const text = fs.readFileSync(`fixtures/${name}`, "utf8");
+              if (text.includes("\r")) throw new Error(`${name} contains CRLF`);
+            }
+            const doc = fs.readFileSync("fixtures/basic.nd.html", "utf8");
+            if (!doc.endsWith("\n")) throw new Error("missing trailing newline");
+            console.log("fixtures are LF-only with a trailing newline");
+          '
+
+  lint:
+    name: lint · generated bundle in sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - name: editor/neodoc-editor.html matches editor/ + src/
+        run: node tools/bundle.js --check
+
+  e2e:
+    name: ${{ matrix.project }} · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, project: chromium, browser: chromium }
+          - { os: ubuntu-latest, project: firefox, browser: firefox }
+          - { os: ubuntu-latest, project: webkit, browser: webkit }
+          - { os: ubuntu-latest, project: mobile-chrome, browser: chromium }
+          - { os: ubuntu-latest, project: mobile-safari, browser: webkit }
+          # Real branded Blink builds from the runner image (not our Chromium):
+          # Chrome and Edge. Brave/Vivaldi/Opera cannot be installed on CI images,
+          # and they are the same engine — the fallbacks spec is what covers their
+          # difference (missing/behaving-differently optional APIs).
+          - { os: ubuntu-latest, project: chrome, browser: chromium, guard: google-chrome }
+          - { os: ubuntu-latest, project: edge, browser: chromium, guard: microsoft-edge }
+          # WebKit on the OS Safari ships on is the closest stand-in for Safari.
+          - { os: macos-latest, project: webkit, browser: webkit }
+          - { os: macos-latest, project: mobile-safari, browser: webkit }
+          - { os: windows-latest, project: chromium, browser: chromium }
+          - { os: windows-latest, project: firefox, browser: firefox }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/Library/Caches/ms-playwright
+            ~/AppData/Local/ms-playwright
+          key: pw-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - name: Install browsers (Linux)
+        if: runner.os == 'Linux'
+        run: npx playwright install --with-deps ${{ matrix.browser }}
+      - name: Install browsers
+        if: runner.os != 'Linux'
+        run: npx playwright install ${{ matrix.browser }}
+      - name: End to end
+        shell: bash
+        run: |
+          if [ -n "${{ matrix.guard }}" ] && ! command -v ${{ matrix.guard }} >/dev/null 2>&1; then
+            echo "::notice::${{ matrix.project }} is not installed on this runner; skipping. Its engine is still covered by the chromium project."
+            exit 0
+          fi
+          npx playwright test --project=${{ matrix.project }}
+      - name: Report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-${{ matrix.project }}-${{ matrix.os }}
+          path: playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore

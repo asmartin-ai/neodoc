@@ -73,7 +73,11 @@ function parseArgs(argv) {
 
 // ---------------------------------------------------------------------- doc IO
 
+/** `report.nd.html`, `report.ndoc.html`, `report.ndoc` → `report`. */
+const stripExt = (path) => path.replace(/\.(?:nd\.|ndoc\.)?html?$/i, '').replace(/\.ndoc$/i, '');
+
 function hasStyle(text) {
+
   return /<style[\s>]/i.test(text);
 }
 
@@ -213,7 +217,7 @@ function cmdLint(args) {
 
 function cmdNew(args) {
   const file = args.positional[0];
-  const title = String(args.flags.title ?? (file ? basename(file).replace(/\.(nd\.)?html?$/i, '') : 'Untitled'));
+  const title = String(args.flags.title ?? (file ? stripExt(basename(file)) : 'Untitled'));
   const nodes = args.flags.stdin
     ? markdown(readFileSync(0, 'utf8')).nodes
     : [
@@ -271,7 +275,7 @@ function cmdAdd(args) {
   const mode = ['before', 'after', 'into'].find((k) => args.flags[k] !== undefined);
   if (!file || !mode) return fail('add: usage: neodoc add FILE (--before SEL | --after SEL | --into SEL) (--md S | --html S | --file F | --stdin)');
   const flagValue = args.flags[mode];
-  const target = String(typeof flagValue === 'string' ? flagValue : args.positional[1]);
+  const target = String(flagValue === true ? args.positional[1] : flagValue);
   if (target === 'undefined') throw new Error(`add: --${mode} needs a selector`);
   const doc = openDoc(file);
   const [hit] = bodyHits(doc, target);
@@ -323,7 +327,7 @@ function cmdNote(args) {
   const [sub, file, selector] = args.positional;
   if (!sub || !file) return fail('note: usage: neodoc note add|ls|reply|done|undo|rm FILE [...]');
   const doc = openDoc(file);
-  const author = String(args.flags.by ?? process.env.USER ?? 'unknown');
+  const author = String(args.flags.by ?? process.env.USER ?? process.env.USERNAME ?? 'unknown');
   const at = String(args.flags.at ?? now());
 
   if (sub === 'ls') {
@@ -381,7 +385,7 @@ function cmdImport(args) {
   const text = source && source !== '-' ? readFileSync(source, 'utf8') : readFileSync(0, 'utf8');
   const { nodes, warnings } = markdown(text);
   for (const w of warnings) err(`import: ${w}`);
-  const title = firstHeadingText(nodes) ?? (source ? basename(source).replace(/\.(md|markdown|txt)$/i, '') : 'Untitled');
+  const title = firstHeadingText(nodes) ?? (source ? stripExt(basename(source)) : 'Untitled');
   const doc = { ...fragmentDoc(nodes, title), file: outputPath(args.flags, '-'), reformatted: false };
   saveDoc(doc, doc.file);
   return 0;
@@ -389,7 +393,7 @@ function cmdImport(args) {
 
 function outputPath(flags, fallback) {
   if (flags.o === undefined) return fallback;
-  if (typeof flags.o !== 'string') throw new Error('-o needs a path (use -o - for stdout)');
+  if (flags.o === true) throw new Error('-o needs a path (use -o - for stdout)');
   return flags.o;
 }
 
@@ -413,8 +417,8 @@ async function convert(args, kind) {
   if (!file) return fail(`${kind}: usage: neodoc ${kind} FILE [-o OUT]`);
   const doc = openDoc(file);
   const target = outputPath(args.flags, kind === 'md'
-    ? file.replace(/\.(nd\.)?html?$/i, '.md')
-    : file.replace(/\.(nd\.)?html?$/i, '.docx'));
+    ? `${stripExt(file)}.md`
+    : `${stripExt(file)}.docx`);
   if (kind === 'md') {
     const md = toMarkdown(doc.body, { comments: String(args.flags.comments ?? 'html') });
     if (target === '-') process.stdout.write(md);

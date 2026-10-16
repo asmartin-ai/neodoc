@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { inflateRawSync } from 'node:zlib';
+import { readFileSync } from 'node:fs';
 import { toDocx } from '../src/docx.js';
 import { parse } from '../src/parse.js';
 
@@ -12,26 +13,35 @@ function body(html) {
   let found = null;
   (function seek(n) {
     if (found || n.type !== 'element') return;
-    if (n.name === 'body') { found = n; return; }
+
+    if (n.name === 'body') { found = n;
+
+ return; }
+
     for (const c of n.children || []) seek(c);
   })(root);
+
   return found;
 }
 
 const utf8 = new TextDecoder();
+
 const text = (u8) => utf8.decode(u8);
 
 /** Minimal zip reader: no data descriptors are written, so sizes and crc come from the headers. */
 function unzip(bytes) {
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   let eocd = -1;
+
   for (let i = bytes.length - 22; i >= 0; i--) {
     if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
   }
+
   assert.ok(eocd >= 0, 'end of central directory found');
   const count = dv.getUint16(eocd + 10, true);
   let at = dv.getUint32(eocd + 16, true);
   const files = new Map();
+
   for (let i = 0; i < count; i++) {
     assert.equal(dv.getUint32(at, true), 0x02014b50, 'central directory header');
     const method = dv.getUint16(at + 10, true);
@@ -51,6 +61,7 @@ function unzip(bytes) {
     files.set(name, method === 8 ? new Uint8Array(inflateRawSync(data)) : new Uint8Array(data));
     at += 46 + nameLen + extraLen + commentLen;
   }
+
   return files;
 }
 
@@ -61,23 +72,50 @@ function assertWellFormed(xml, label = 'xml') {
   const re = /<(\/?)([A-Za-z_][\w:.-]*)((?:"[^"]*"|[^>"])*?)(\/?)>|<\?[^>]*\?>|<!--[\s\S]*?-->/g;
   let m;
   let last = 0;
+
   while ((m = re.exec(xml))) {
     const gap = xml.slice(last, m.index);
+
     if (gap.includes('<')) errors.push('stray <');
+
     if (/&(?!(amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);)/.test(gap)) errors.push('unescaped &');
     last = m.index + m[0].length;
+
     if (m[2] === undefined) continue; // declaration or comment
+
     if (m[1] === '/') {
       if (stack.pop() !== m[2]) errors.push(`unbalanced </${m[2]}>`);
     } else if (!m[4]) {
       stack.push(m[2]);
     }
   }
+
   assert.equal(errors.length, 0, `${label}: ${errors.join(', ')}`);
   assert.equal(stack.length, 0, `${label}: unclosed ${stack.join(', ')}`);
 }
 
 const xmlParts = (files) => [...files].filter(([n]) => n.endsWith('.xml') || n.endsWith('.rels'));
+
+/** Compression method of every entry, in central-directory order. */
+function zipMethods(bytes) {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let eocd = -1;
+
+  for (let i = bytes.length - 22; i >= 0; i--) {
+    if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  }
+
+  const count = dv.getUint16(eocd + 10, true);
+  let at = dv.getUint32(eocd + 16, true);
+  const methods = [];
+
+  for (let i = 0; i < count; i++) {
+    methods.push(dv.getUint16(at + 10, true));
+    at += 46 + dv.getUint16(at + 28, true) + dv.getUint16(at + 30, true) + dv.getUint16(at + 32, true);
+  }
+
+  return methods;
+}
 
 // ---------------------------------------------------------------------- tests
 
@@ -90,7 +128,13 @@ test('the package holds a complete, well-formed OPC part set', async () => {
     'word/_rels/document.xml.rels', 'word/document.xml', 'word/numbering.xml',
     'word/settings.xml', 'word/styles.xml',
   ].sort());
+
   for (const [name, data] of xmlParts(files)) assertWellFormed(text(data), name);
+  // Node only gained 'deflate-raw' in 20.12; where it exists entries are deflated,
+  // elsewhere the writer must have stored them instead of failing.
+  let deflateRaw = true;
+  try { new CompressionStream('deflate-raw'); } catch { deflateRaw = false; }
+  assert.deepEqual([...new Set(zipMethods(bytes))], [deflateRaw ? 8 : 0]);
   assert.match(text(files.get('word/settings.xml')), /<w:compat>/);
   assert.match(text(files.get('word/document.xml')), /<w:sectPr>/);
 });
@@ -100,6 +144,7 @@ test('blocks map to heading, normal, quote and fixed-spacing code paragraphs', a
     '<h2>Title</h2><p>plain</p><blockquote><p>quoted</p></blockquote>'
     + '<pre>if (x) {\n    y();\n}</pre>',
   )));
+
   const doc = text(files.get('word/document.xml'));
   assert.match(doc, /<w:pStyle w:val="Heading2"\/>/);
   assert.match(doc, /<w:pStyle w:val="Normal"\/>/);
@@ -120,6 +165,7 @@ test('inline elements map to the documented run properties', async () => {
     '<p>a <strong>b</strong> <em>c</em> <code>d</code> <s>e</s> <u>f</u> <mark>g</mark> '
     + '<sub>h</sub><sup>i</sup><br>end</p>',
   ))).get('word/document.xml'));
+
   assert.match(doc, /<w:rPr><w:b\/><\/w:rPr>/);
   assert.match(doc, /<w:rPr><w:i\/><\/w:rPr>/);
   assert.match(doc, /<w:rFonts w:ascii="Consolas"[^/]*\/><w:shd w:val="clear"[^/]*\/>/);
@@ -136,6 +182,7 @@ test('a 2×2 table produces four bounded cells with an aligned, shaded header', 
     '<table><thead><tr><th>a</th><th data-align="right">b</th></tr></thead>'
     + '<tbody><tr><td>1</td><td>2</td></tr></tbody></table>',
   ))).get('word/document.xml'));
+
   assert.equal((doc.match(/<w:tc>/g) || []).length, 4);
   assert.equal((doc.match(/<w:tcPr>/g) || []).length, 4);
   assert.match(doc, /<w:tbl>/);
@@ -151,6 +198,7 @@ test('lists use real numbering, one instance per ordered list', async () => {
     '<ul><li>one</li><li>two</li><li>parent<ul><li>nested</li></ul></li></ul>'
     + '<ol><li>first</li></ol><ol><li>second</li></ol>',
   )));
+
   const doc = text(files.get('word/document.xml'));
   // Bullets all share numId 1; the two ordered lists must not share a sequence.
   assert.equal((doc.match(/<w:numId w:val="1"\/>/g) || []).length, 4);
@@ -160,6 +208,7 @@ test('lists use real numbering, one instance per ordered list', async () => {
   assert.match(doc, /<w:t>one<\/w:t>/);
   assert.match(doc, /<w:t>second<\/w:t>/);
   const numbering = text(files.get('word/numbering.xml'));
+
   for (const id of [1, 2, 3]) assert.match(numbering, new RegExp(`<w:num w:numId="${id}"><w:abstractNumId w:val="${id === 1 ? 0 : 1}"/>`));
   assert.equal((numbering.match(/<w:abstractNum /g) || []).length, 2);
 });
@@ -169,6 +218,7 @@ test('hr, sections and task items map to their own block forms', async () => {
     '<hr><section data-title="Appendix"><p>x</p></section>'
     + '<ul><li data-checked="true">done</li><li data-checked="false">todo</li></ul>',
   ))).get('word/document.xml'));
+
   assert.match(doc, /<w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="auto"\/><\/w:pBdr>/);
   assert.match(doc, /<w:t xml:space="preserve">\u2611 <\/w:t>/);
   assert.match(doc, /<w:t xml:space="preserve">\u2610 <\/w:t>/);
@@ -182,6 +232,7 @@ test('a mark with a thread becomes a real comment; replies stay in its body', as
     + '<p data-author="ada" data-at="2026-10-16T09:12:00Z">Source?</p>'
     + '<p data-author="ken" data-at="2026-10-16T10:00:00Z">Yes.</p></aside>',
   )));
+
   assert.ok(files.has('word/comments.xml'));
   const doc = text(files.get('word/document.xml'));
   assert.match(doc, /<w:commentRangeStart w:id="1"\/>/);
@@ -196,6 +247,7 @@ test('a mark with a thread becomes a real comment; replies stay in its body', as
   assert.match(comments, /<w:t>Yes\.<\/w:t>/);
   assert.match(text(files.get('[Content_Types].xml')), /PartName="\/word\/comments.xml"/);
   assert.match(text(files.get('word/_rels/document.xml.rels')), /Type="[^"]*\/comments" Target="comments.xml"/);
+
   for (const [name, data] of xmlParts(files)) assertWellFormed(text(data), name);
 });
 
@@ -212,6 +264,7 @@ test('ins and del become tracked changes with author, date and delText', async (
     '<p>x <ins data-author="ada" data-at="2026-10-16T09:12:00Z">added</ins> '
     + '<del data-author="ken" data-at="2026-10-16T10:00:00Z">gone</del></p>',
   ))).get('word/document.xml'));
+
   assert.match(doc, /<w:ins w:id="1" w:author="ada" w:date="2026-10-16T09:12:00Z"><w:r><w:t>added<\/w:t><\/w:r><\/w:ins>/);
   assert.match(doc, /<w:del w:id="2" w:author="ken" w:date="2026-10-16T10:00:00Z"><w:r><w:delText>gone<\/w:delText><\/w:r><\/w:del>/);
   assert.ok(!doc.includes('<w:t>gone</w:t>'), 'deleted runs never use w:t');
@@ -229,9 +282,11 @@ test('links become hyperlink runs backed by an external relationship', async () 
 test('images become media parts with a drawing, and unresolved ones warn', async () => {
   const png = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3, 4]);
   const src = `data:image/png;base64,${Buffer.from(png).toString('base64')}`;
+
   const files = unzip(await toDocx(body(
     `<figure><img alt="chart" src="${src}" width="200"><figcaption>The caption</figcaption></figure>`,
   )));
+
   assert.ok(files.has('word/media/image1.png'));
   assert.deepEqual([...files.get('word/media/image1.png')], [...png]);
   const doc = text(files.get('word/document.xml'));
@@ -260,6 +315,7 @@ test('output is byte-deterministic and carries the requested metadata', async ()
   const html = '<h1>Report</h1><p>a <mark data-c="c1">b</mark></p>'
     + '<ul><li>i</li></ul><table><tr><td>1</td><td>2</td></tr></table>'
     + '<aside data-thread="c1"><p data-author="ada" data-at="2026-10-16T09:12:00Z">Why?</p></aside>';
+
   const opts = { title: 'Report', author: 'Ken', date: '2026-10-16', lang: 'en-GB' };
   const first = await toDocx(body(html), { ...opts });
   const second = await toDocx(body(html), { ...opts });
@@ -274,4 +330,55 @@ test('output is byte-deterministic and carries the requested metadata', async ()
   assert.match(core, /<dc:creator>Ken<\/dc:creator>/);
   assert.match(core, /<dcterms:created xsi:type="dcterms:W3CDTF">2026-10-16T00:00:00Z<\/dcterms:created>/);
   assert.match(text(unzip(first).get('word/styles.xml')), /<w:lang w:val="en-GB"\/>/);
+});
+
+test('a runtime without deflate-raw still writes a readable store-only zip', async () => {
+  const html = '<h1>Stored</h1><p>fallback</p><ul><li>i</li></ul>';
+  const real = globalThis.CompressionStream;
+  globalThis.CompressionStream = class {
+    constructor() { throw new TypeError('unsupported compression format: deflate-raw'); }
+  };
+
+  try {
+    const bytes = await toDocx(body(html));
+    const files = unzip(bytes);
+    assert.ok(files.has('word/document.xml'));
+    assert.match(text(files.get('word/document.xml')), /<w:t>Stored<\/w:t>/);
+    assert.deepEqual([...new Set(zipMethods(bytes))], [0], 'every entry falls back to stored');
+    const again = await toDocx(body(html));
+    assert.deepEqual([...bytes], [...again], 'the fallback is deterministic too');
+  } finally {
+    globalThis.CompressionStream = real;
+  }
+});
+
+test('the output does not depend on the host clock, time zone or locale', async () => {
+  const html = '<h1>Report</h1><p>a <mark data-c="c1">b</mark></p>'
+    + '<aside data-thread="c1"><p data-author="ada" data-at="2026-10-16T09:12:00Z">Why?</p></aside>';
+
+  const saved = { TZ: process.env.TZ, LANG: process.env.LANG, LC_ALL: process.env.LC_ALL };
+  const first = await toDocx(body(html));
+  process.env.TZ = 'Pacific/Kiritimati';
+  process.env.LANG = 'tr_TR.UTF-8'; // Turkish: dotted/dotless I breaks locale-aware case mapping
+  process.env.LC_ALL = 'tr_TR.UTF-8';
+  let second;
+
+  try {
+    second = await toDocx(body(html));
+  } finally {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+
+  assert.deepEqual([...first], [...second]);
+  // Nothing in the writer may consult the host: `Date`/`Math.random` would break
+  // determinism, and `localeCompare`/`toLocale*` would order or case text by the
+  // machine's locale (and ICU version). This asserts the source stays free of them.
+  const src = readFileSync(new URL('../src/docx.js', import.meta.url), 'utf8');
+
+  for (const banned of ['new Date', 'Date.now', 'Math.random', 'localeCompare', 'toLocale', 'process.']) {
+    assert.equal(src.includes(banned), false, `src/docx.js must not use ${banned}`);
+  }
 });

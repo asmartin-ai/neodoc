@@ -72,10 +72,14 @@ export function bundle() {
 
   const css = readFileSync(resolve(ROOT, 'editor/editor.css'), 'utf8');
   const page = readFileSync(PAGE, 'utf8');
-  const withCss = page.replace(/<link[^>]*href="editor\.css"[^>]*>/, `<style>\n${css}</style>`);
+  // Function replacements, not strings: the bundled code contains `$&` and other
+  // `$` patterns (src/markdown.js escapes with them) which String.replace would
+  // expand into the matched text, injecting a literal <script src="editor.js"> tag
+  // into the code — which then closes the inline script and breaks the page.
+  const withCss = page.replace(/<link[^>]*href="editor\.css"[^>]*>/, () => `<style>\n${css}</style>`);
   // Still a module script: it lets the editor keep its top-level `await`, and an
   // inline module needs no fetch, so this page works from a `file://` URL.
-  const withJs = withCss.replace(/<script type="module" src="editor\.js"><\/script>/, `<script type="module">\n${code}</script>`);
+  const withJs = withCss.replace(/<script type="module" src="editor\.js"><\/script>/, () => `<script type="module">\n${code}</script>`);
   if (withJs === withCss || withJs === page) throw new Error('editor/index.html no longer has the <link href="editor.css"> + <script src="editor.js"> pair this bundler rewrites');
   return withJs;
 }

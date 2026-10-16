@@ -6,6 +6,15 @@ import { createServer } from 'node:http';
 import { readFile, writeFile, rename } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { dirname, extname, join, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+/** `open`/`start`/`xdg-open`: the one OS-specific bit in the whole tool. */
+function opener(url) {
+  const [cmd, prefix] = process.platform === 'darwin' ? ['open', []]
+    : process.platform === 'win32' ? ['cmd', ['/c', 'start', '']]
+      : ['xdg-open', []];
+  spawn(cmd, [...prefix, url], { detached: true, stdio: 'ignore' }).unref();
+}
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -23,14 +32,14 @@ const TYPES = {
 
 export function serve({ file, port = 8765, open = false }) {
   const root = process.cwd();
-  const assets = new URL('..', import.meta.url).pathname; // the neodoc install (editor/, src/)
+  const assets = resolve(fileURLToPath(new URL('..', import.meta.url))); // the neodoc install (editor/, src/)
   const server = createServer((req, res) => handle(req, res, { root, assets, file }));
   return new Promise((ok, no) => {
     server.on('error', no);
     server.listen(port, '127.0.0.1', () => {
       const url = `http://127.0.0.1:${port}/`;
       process.stdout.write(`neodoc serving ${file}\n  ${url}\n`);
-      if (open) spawn('xdg-open', [url], { detached: true, stdio: 'ignore' }).unref();
+      if (open) opener(url);
       ok(server);
     });
   });

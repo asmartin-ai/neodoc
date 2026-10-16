@@ -40,6 +40,17 @@ is why it is one inline module script with no imports of its own.
 Run the whole suite once at the end of a change, not in a loop. There is no
 watch mode and no repo-wide formatter; `neodoc fmt` is the formatter.
 
+## Lint
+
+`npm run lint` runs oxlint with the vendored anti-slop plugin
+(`tools/oxlint/anti-slop/`, provenance in its `UPSTREAM.md`). Every rule is an
+error except `anti-slop/require-readable-spacing`, which is a **warning on
+purpose**: it demands a blank line before every statement, which would add ~1,500
+whitespace-only lines across this repo and directly fights the project's
+"small files, minimal syntax, easy for agents to read in one sitting" rule. CI
+fails on errors only. If you want the other style, run `npx oxlint --fix` — the
+config is one word away.
+
 ## The invariants tests must protect
 
 1. `format()` is idempotent: `format(format(x).text).text === format(x).text`.

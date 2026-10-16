@@ -42,6 +42,17 @@ const PASTE_DROP = new Set(['script', 'style', 'iframe', 'object', 'embed', 'for
 
 const state = { name: 'untitled.nd.html', mode: 'inline', dirty: false, served: false, handle: null, suggest: false, embed: true };
 
+// Caret anchors. A browser resolves a block-final range to the end of the last
+// *text* position, so once an input rule creates `<strong>x</strong>` at the end of
+// a block, further typing extends the <strong> instead of starting new text — an
+// empty text node or an empty element is not respected as an anchor (measured in
+// Chromium). A zero-width space is, so anchors are seeded with one, and
+// canonicalText() strips every ZWSP before format() runs: it never reaches a file.
+const ZERO = '\u200B';
+const textOnly = (s) => s.replace(/\u200B/g, '');
+/** Is a block empty for editing purposes? A ZWSP caret anchor is not content. */
+const blockEmpty = (el) => textOnly(el.textContent).trim() === '' && !el.querySelector('img, br');
+
 // ------------------------------------------------------------------ dom helpers
 
 function h(name, attrs = {}, ...kids) {
@@ -96,7 +107,7 @@ function atBlockStart(range, block) {
   const r = document.createRange();
   r.setStart(block, 0);
   r.setEnd(range.startContainer, range.startOffset);
-  return r.toString() === '';
+  return textOnly(r.toString()) === '';
 }
 function blocksInBody() {
   return [...document.body.children].filter((n) => n !== CHROME);
@@ -146,7 +157,8 @@ function canonicalText() {
   for (const a of attrs) body.removeAttribute(a);
   let html;
   try {
-    html = '<!doctype html>\n' + document.documentElement.outerHTML;
+    // Strip the ZWSP caret anchors: they are editor state, never file content.
+    html = '<!doctype html>\n' + document.documentElement.outerHTML.split(ZERO).join('');
   } finally {
     attrs.forEach((a, i) => { if (saved[i] !== null) body.setAttribute(a, saved[i]); });
     for (const n of assets) document.head.append(n);
@@ -231,7 +243,8 @@ async function loadServed() {
 function download(src) {
   const url = URL.createObjectURL(new Blob([src], { type: 'text/html;charset=utf-8' }));
   const a = h('a', { href: url, download: state.name });
-  document.body.append(a);
+  // The click target must not be a child of <body>: that is the document.
+  CHROME.append(a);
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
@@ -324,17 +337,15 @@ function replaceBlock(block, next, caretTarget = next) {
 }
 
 /**
- * Put the caret just after `node` so the next keystroke starts new content instead
- * of continuing the element we just created. Anchoring the range at
- * (parent, index+1) does not work: a browser resolves a block-final position to the
- * inside of a trailing inline element, so typing after `**bold**` would extend the
- * <strong>. A zero-length text node is unambiguous — and format() drops empty text
- * nodes, so it never reaches the file.
+ * Put the caret just past `node`, seeding it with a ZWSP anchor (see ZERO above):
+ * the next keystroke must start new content, not extend the element we just made.
+ * `setCaretAfter` alone is not enough — a browser resolves the block-final
+ * position to the inside of the trailing element.
  */
-function caretAfter(node) {
-  const t = text('');
+function anchorPast(node) {
+  const t = text(ZERO);
   node.after(t);
-  setCaret(t, 0);
+  setCaret(t, 1);
 }
 
 /** Block-start markdown rules: `# `, `- `, `1. `, `> `, ```` ``` ````, `---`. */
@@ -350,9 +361,9 @@ function runBlockRule() {
   const post = document.createRange();
   post.setStart(r.startContainer, r.startOffset);
   post.setEnd(block, block.childNodes.length);
-  if (post.toString() !== '') return false;
+  if (textOnly(post.toString()) !== '') return false;
   // Browsers type a trailing space as U+00A0; the markdown marker is " ".
-  const s = pre.toString().replace(/\u00a0/g, ' ');
+  const s = textOnly(pre.toString()).replace(/\u00a0/g, ' ');
   let m;
   if ((m = /^(#{1,6}) $/.exec(s))) return replaceBlock(block, h(`h${m[1].length}`));
   if (/^[-*+] $/.test(s)) { const li = h('li'); return replaceBlock(block, h('ul', {}, li), li); }
@@ -385,7 +396,7 @@ function runInlineRule() {
     const el = make(m);
     range.deleteContents();
     range.insertNode(el);
-    setCaretAfter(el);
+    anchorPast(el);
     return true;
   }
   return false;
@@ -412,19 +423,21 @@ function setBlockName(block, name) {
 }
 function toggleList(block, type) {
   const p = block.parentNode;
-  if (block.nodeName === 'LI' && p.nodeName.toLowerCase() === type && p.children.length === 1) {
+  if (block.nodeName === 'LI' && p.nodeName.toLowerCase() === type) {
+    // Leaving a list: with siblings, leave the item; as the only item, leave the list.
     const nu = h('p');
     while (block.firstChild) nu.append(block.firstChild);
-    p.replaceWith(nu);
+    if (p.children.length === 1) p.replaceWith(nu); else block.replaceWith(nu);
     selectContents(nu);
     return nu;
   }
-  if (block.nodeName === 'LI' && p.nodeName.toLowerCase() === type) {
-    const nu = h('p');
-    while (block.firstChild) nu.append(block.firstChild);
-    block.replaceWith(nu);
-    selectContents(nu);
-    return nu;
+  if (block.nodeName === 'LI') {
+    // An item of the other list type: retype the whole list, never nest one in the other.
+    const nu = h(type);
+    while (p.firstChild) nu.append(p.firstChild);
+    p.replaceWith(nu);
+    selectContents(block);
+    return block;
   }
   const li = h('li');
   while (block.firstChild) li.append(block.firstChild);
@@ -517,13 +530,16 @@ function onEnter(e) {
     return edited();
   }
   const name = block.nodeName.toLowerCase();
-  if (name === 'pre' || name === 'td' || name === 'th') return insertBreak();
+  if (name === 'pre') { insertNewline(); return edited(); }
+  if (name === 'td' || name === 'th') return insertBreak();
   if (name === 'li') {
-    if (block.textContent === '') {
-      // Empty item: leave the list (or remove it, if it was the only item).
+    if (blockEmpty(block)) {
+      // Empty item: leave the list — the paragraph belongs outside it (inside the
+      // enclosing <li> when the list is nested, otherwise after the whole list).
       const list = block.parentNode;
       const left = h('p');
-      block.replaceWith(left);
+      list.after(left);
+      block.remove();
       if (!list.children.length) list.remove();
       setCaret(left, 0);
     } else {
@@ -535,7 +551,7 @@ function onEnter(e) {
     return edited();
   }
   if (name === 'p' && block.parentNode.nodeName === 'BLOCKQUOTE'
-      && block.parentNode.children.length === 1 && block.textContent === '') {
+      && block.parentNode.children.length === 1 && blockEmpty(block)) {
     const q = block.parentNode;
     const after = h('p');
     q.after(after);
@@ -566,13 +582,25 @@ function insertBreak() {
   r.deleteContents();
   const br = h('br');
   r.insertNode(br);
-  setCaretAfter(br);
+  anchorPast(br);
+  edited();
+}
+/** `pre` keeps newlines verbatim, so a line break there is a "\n", not a `<br>`. */
+function insertNewline() {
+  const r = caretRange();
+  if (!r) return edited();
+  r.deleteContents();
+  const nl = text('\n');
+  r.insertNode(nl);
+  setCaret(nl, 1);
   edited();
 }
 
 function onShiftEnter(e) {
   e.preventDefault();
-  insertBreak();
+  const r = caretRange();
+  const block = r && blockOf(r.startContainer);
+  if (block && block.nodeName === 'PRE') insertNewline(); else insertBreak();
 }
 
 function onBackspace(e) {
@@ -582,7 +610,7 @@ function onBackspace(e) {
   if (!block || !atBlockStart(r, block)) return;
   const name = block.nodeName.toLowerCase();
   if (name.startsWith('h') || name === 'li' || name === 'p') {
-    if (block.textContent !== '') return;
+    if (!blockEmpty(block)) return;
     const container = block.parentNode;
     if (name === 'p' && container.nodeName !== 'BLOCKQUOTE') return;
     e.preventDefault();
@@ -599,7 +627,7 @@ function onBackspace(e) {
     setCaret(left, 0);
     return edited();
   }
-  if (name !== 'p' || block.textContent !== '') return;
+  if (name !== 'p' || !blockEmpty(block)) return;
   const prev = block.previousElementSibling;
   if (!prev || !LEAF.has(prev.nodeName.toLowerCase())) return;
   e.preventDefault();
@@ -700,8 +728,8 @@ function suggestDelete(kind) {
   const node = h('del', { 'data-author': AUTHOR, 'data-at': now() });
   node.append(r.extractContents());
   r.insertNode(node);
-  if (ins) { /* deleting existing text inside our own insertion: still track it */ }
-  setCaretAfter(node);
+  if (ins) { /* the caret sat in our own <ins>: the deletion is still tracked */ }
+  anchorPast(node);
   console.info(`neodoc: tracked deletion of ${JSON.stringify(removed)}`);
   return true;
 }
@@ -731,12 +759,24 @@ function suggestInsert(data) {
   }
   return true;
 }
-/** Put a caret inside a block, creating a <p> when the caret sits between blocks. */
+/**
+ * Put a caret inside a block, creating a <p> when the caret sits between blocks.
+ * A <p> is not allowed everywhere a caret can be (ul/ol/table containers), so the
+ * new paragraph goes after the nearest ancestor that cannot hold one.
+ */
 function ensureBlock(range) {
   if (blockOf(range.startContainer)) return;
   const p = h('p');
-  range.deleteContents();
-  range.insertNode(p);
+  let outer = range.startContainer;
+  while (outer && outer !== document.body && !['UL', 'OL', 'TABLE', 'THEAD', 'TBODY', 'TR'].includes(outer.nodeName)) {
+    outer = outer.parentNode;
+  }
+  if (outer && outer !== document.body) {
+    outer.after(p);
+  } else {
+    range.deleteContents();
+    range.insertNode(p);
+  }
   setCaret(p, 0);
 }
 /** Reuse the <ins> the caret is already inside (same author) so runs stay merged. */
@@ -833,14 +873,14 @@ function insertInline(nodes) {
     const at = caretRange();
     at.insertNode(nodes[0]);
     for (const n of nodes.slice(1)) nodes[0].parentNode.insertBefore(n, nodes[0].nextSibling);
-    setCaretAfter(nodes[nodes.length - 1]);
+    anchorPast(nodes[nodes.length - 1]);
     return edited();
   }
   r.deleteContents();
   const frag = document.createDocumentFragment();
   frag.append(...nodes);
   r.insertNode(frag);
-  setCaretAfter(nodes[nodes.length - 1]);
+  anchorPast(nodes[nodes.length - 1]);
   edited();
 }
 /** Insert whole blocks at the caret: split the caret block, splice, re-close. */
@@ -858,11 +898,11 @@ function insertNodes(nodes) {
   for (const n of nodes) parent.insertBefore(n, anchor);
   const tailEl = h('p');
   tailEl.append(tail);
-  if (tailEl.textContent !== '' || tailEl.childNodes.length) {
+  if (textOnly(tailEl.textContent) !== '') {
     if (insideLi) block.append(tailEl); else parent.insertBefore(tailEl, anchor);
   }
-  if (block.textContent === '' && !insideLi) block.remove();
-  setCaret(tailEl.childNodes.length ? tailEl : nodes[nodes.length - 1], 0);
+  if (blockEmpty(block) && !insideLi) block.remove();
+  setCaret(textOnly(tailEl.textContent) !== '' ? tailEl : nodes[nodes.length - 1], 0);
   edited();
 }
 
@@ -977,7 +1017,18 @@ const COMMANDS = {
   suggest: () => toggleSuggest(),
   accept: () => changeCommand(acceptChanges, 'accepted'),
   reject: () => changeCommand(rejectChanges, 'rejected'),
-  'copy-cli': () => { navigator.clipboard.writeText($('#st-cli').textContent); status('CLI command copied'); },
+  'copy-cli': () => {
+    const cmd = $('#st-cli').textContent;
+    const pending = navigator.clipboard && navigator.clipboard.writeText(cmd);
+    if (pending && pending.then) {
+      pending.then(() => status('CLI command copied'),
+        () => { selectNode($('#st-cli')); status('clipboard blocked — the command is selected, copy it manually'); });
+    } else {
+      // No clipboard API (non-secure origin, file:// in Firefox, hardened builds).
+      selectNode($('#st-cli'));
+      status('clipboard blocked — the command is selected, copy it manually');
+    }
+  },
 };
 function blockCommand(fn) {
   const r = caretRange();
@@ -1112,7 +1163,7 @@ document.addEventListener('drop', async (e) => {
 
 sweepEditorNodes();
 if (!(await loadServed())) {
-  status('no file open — Open a .nd.html file, or run neodoc serve');
+  status('no file open — Open a .nd.html (or drop one in); Save writes through the browser file handle when available, else downloads it');
 }
 if (!blocksInBody().length) document.body.prepend(h('p'));
 refresh();
