@@ -61,16 +61,26 @@ test('serves a document, edits it, and saves it in place', async ({ page }) => {
     // first was refused as stale and silently became a download. (Before the checks
     // below, because they rewrite the file to test canonicality, which legitimately
     // makes the page's revision stale.)
-    // No caret gymnastics: where the click lands differs between engines (`End` does not
-    // move the caret in macOS WebKit), and what matters is that the second save reaches
-    // the file at all.
+    // Place the caret at the end of the heading explicitly: a click sometimes *selects*
+    // the whole line in CI, and the next keystroke would then replace the first edit
+    // instead of adding to it — a test artefact that looked like a lost save.
     const beforeSecond = await readFile(file, 'utf8');
-    await page.locator('body > h1').first().click();
+    await page.evaluate(() => {
+      const range = document.createRange();
+      range.selectNodeContents(document.querySelector('body > h1'));
+      range.collapse(false);
+      const sel = getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    });
     await page.keyboard.type('AGAIN');
+    await expect(page.locator('body > h1')).toContainText('Servededit');
+    await expect(page.locator('body > h1')).toContainText('AGAIN');
     await page.locator('button[data-cmd="save"]').click();
     await expect(page.locator('#st-dirty')).toHaveText('saved');
     const afterSecond = await readFile(file, 'utf8');
     expect(afterSecond).not.toBe(beforeSecond); // a download fallback would leave it alone
+    expect(afterSecond).toContain('Servededit');
     expect(afterSecond).toContain('AGAIN');
 
     const onDisk = await readFile(file, 'utf8');
