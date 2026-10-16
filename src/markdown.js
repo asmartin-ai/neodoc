@@ -263,15 +263,13 @@ function tableMd(node, ctx) {
   }
   const width = kidsOf(headRows[0]).length;
   if (all.some((r) => kidsOf(r).length !== width)) return rawHtml(node);
-  const align = (i) => {
-    const a = attrsOf(kidsOf(headRows[0])[i])['data-align'];
-    if (a) return a;
-    for (const r of bodyRows) {
-      const b = attrsOf(kidsOf(r)[i] || {})['data-align'];
-      if (b) return b;
-    }
-    return null;
-  };
+  // The delimiter row is one alignment per column, so a column is only expressible
+  // when every cell in it says the same thing — a lone `data-align` on one cell would
+  // come back on all of them.
+  const column = (i) => all.map((r) => attrsOf(kidsOf(r)[i] || {})['data-align'] ?? null);
+  const uniform = (i) => column(i).every((a) => a === column(i)[0]);
+  const align = (i) => (uniform(i) ? column(i)[0] : null);
+  if (Array.from({ length: width }, (_, i) => i).some((i) => !uniform(i))) return rawHtml(node);
   // A table cell is one line, so a break inside it must be the `<br>` form.
   const cellMd = (c) => {
     const prev = ctx.solidBr;
@@ -294,6 +292,9 @@ function figureMd(node, ctx) {
   const cap = kids.find((c) => isEl(c, 'figcaption'));
   // Layout whitespace is not a child to report; anything else the figure holds is.
   const extra = kids.some((c) => c !== img && c !== cap && !(c.type === 'text' && !c.text.trim()));
+  // An attribute on the caption is as unexpressible as one on the figure, and
+  // `![alt](src)` + caption can only read back in that order.
+  const capBare = !!cap && onlyAttrs(cap, NO_ATTRS) && kids.indexOf(cap) > kids.indexOf(img);
   // A caption markdown cannot hold exactly — emphasised (it comes back as plain
   // text), carrying `*` or a line break (it would read as ordinary markdown), empty
   // — and a figure without one (`![…](…)` reads back as `<p><img></p>`) all go out
@@ -301,8 +302,8 @@ function figureMd(node, ctx) {
   const richCap = !!cap && kidsOf(cap).some((c) => c.type === 'element' && (c.name === 'em' || c.name === 'strong'));
   const capMd = cap ? inlineMd(kidsOf(cap), ctx) : '';
   const image = img ? imgMd(img) : '';
-  if (!img || !cap || !capMd || extra || richCap || /[*\n]/.test(capMd) || image.startsWith('<')
-    || !onlyAttrs(node, NO_ATTRS)) return rawHtml(node);
+  if (!img || !cap || !capBare || !capMd || extra || richCap || /[*\n]/.test(capMd)
+    || image.startsWith('<') || !onlyAttrs(node, NO_ATTRS)) return rawHtml(node);
   return `${image}\n\n*${capMd}*`;
 }
 

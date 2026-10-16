@@ -3764,15 +3764,13 @@ function tableMd(node, ctx) {
   }
   const width = kidsOf(headRows[0]).length;
   if (all.some((r) => kidsOf(r).length !== width)) return rawHtml(node);
-  const align = (i) => {
-    const a = attrsOf(kidsOf(headRows[0])[i])['data-align'];
-    if (a) return a;
-    for (const r of bodyRows) {
-      const b = attrsOf(kidsOf(r)[i] || {})['data-align'];
-      if (b) return b;
-    }
-    return null;
-  };
+  // The delimiter row is one alignment per column, so a column is only expressible
+  // when every cell in it says the same thing — a lone `data-align` on one cell would
+  // come back on all of them.
+  const column = (i) => all.map((r) => attrsOf(kidsOf(r)[i] || {})['data-align'] ?? null);
+  const uniform = (i) => column(i).every((a) => a === column(i)[0]);
+  const align = (i) => (uniform(i) ? column(i)[0] : null);
+  if (Array.from({ length: width }, (_, i) => i).some((i) => !uniform(i))) return rawHtml(node);
   // A table cell is one line, so a break inside it must be the `<br>` form.
   const cellMd = (c) => {
     const prev = ctx.solidBr;
@@ -3795,6 +3793,9 @@ function figureMd(node, ctx) {
   const cap = kids.find((c) => isEl(c, 'figcaption'));
   // Layout whitespace is not a child to report; anything else the figure holds is.
   const extra = kids.some((c) => c !== img && c !== cap && !(c.type === 'text' && !c.text.trim()));
+  // An attribute on the caption is as unexpressible as one on the figure, and
+  // `![alt](src)` + caption can only read back in that order.
+  const capBare = !!cap && onlyAttrs(cap, NO_ATTRS) && kids.indexOf(cap) > kids.indexOf(img);
   // A caption markdown cannot hold exactly — emphasised (it comes back as plain
   // text), carrying `*` or a line break (it would read as ordinary markdown), empty
   // — and a figure without one (`![…](…)` reads back as `<p><img></p>`) all go out
@@ -3802,8 +3803,8 @@ function figureMd(node, ctx) {
   const richCap = !!cap && kidsOf(cap).some((c) => c.type === 'element' && (c.name === 'em' || c.name === 'strong'));
   const capMd = cap ? inlineMd(kidsOf(cap), ctx) : '';
   const image = img ? imgMd(img) : '';
-  if (!img || !cap || !capMd || extra || richCap || /[*\n]/.test(capMd) || image.startsWith('<')
-    || !onlyAttrs(node, NO_ATTRS)) return rawHtml(node);
+  if (!img || !cap || !capBare || !capMd || extra || richCap || /[*\n]/.test(capMd)
+    || image.startsWith('<') || !onlyAttrs(node, NO_ATTRS)) return rawHtml(node);
   return `${image}\n\n*${capMd}*`;
 }
 
@@ -4742,11 +4743,13 @@ function safeFromHead(node) {
   return node.name === 'meta' && (node.attrs || {}).charset !== undefined;
 }
 
-const state = { name: 'untitled.nd.html', mode: 'inline', dirty: false, handle: null, suggest: false, embed: true, undo: [] };
+const state = {
+  name: 'untitled.nd.html', mode: 'inline', dirty: false, handle: null, suggest: false,
+  embed: true, undo: [], savedText: '',
+};
 
-// ponytail: a count, not a byte budget — a very large document costs one copy of
-// itself per entry. Upgrade to a byte-bounded ring if documents get big.
-const UNDO_LIMIT = 50;
+// An entry is a copy of the whole document, so the history is bounded by bytes.
+const UNDO_BYTES = 4 * 1024 * 1024;
 // Typing is coalesced into one entry per pause: 50 entries of per-keystroke history
 // would be a serialization per keystroke, which a big document cannot afford.
 const TYPING_PAUSE = 500;
@@ -4952,11 +4955,12 @@ function sweepEditorNodes() {
  * different block instead of undoing the Enter.
  */
 function snapshot(text) {
-  const current = text === undefined ? canonicalText().text : text;
+  const current = text === undefined ? documentText() : text;
   lastSnapshotAt = Date.now();
   if (state.undo[state.undo.length - 1] === current) return;
   state.undo.push(current);
-  if (state.undo.length > UNDO_LIMIT) state.undo.shift();
+  let bytes = state.undo.reduce((n, t) => n + t.length, 0);
+  while (state.undo.length > 1 && bytes > UNDO_BYTES) bytes -= state.undo.shift().length;
 }
 
 /** A typing snapshot, coalesced: serializing the document per keystroke is too much
@@ -4968,15 +4972,37 @@ function snapshotTyping() {
 
 /** Step the document back one snapshot, keeping the caret in its block. */
 function undo() {
-  const text = state.undo.pop();
+  const here = documentText();
+  let text = state.undo.pop();
+  // A handler that took a snapshot and then changed nothing is not a step: skip it
+  // rather than answer Ctrl+Z with a keystroke that shows no difference.
+  while (text !== undefined && text === here) text = state.undo.pop();
   if (text === undefined) { status('nothing to undo'); return; }
   const keep = caretMark();
-  applyDocument(text);
-  state.dirty = true;
+  const { text: canonical } = format(text, { style: modeOfText(text) });
+  applyDocument(canonical);
+  // Undoing back to what was saved is not "unsaved".
+  state.dirty = canonical !== state.savedText;
   refresh();
   restoreCaret(keep);
-  status('undone — '
-    + (state.undo.length ? `${state.undo.length} more step(s)` : 'back to the last saved state'));
+  status(`undone — ${state.undo.length ? `${state.undo.length} more step(s)` : `dirty: ${state.dirty}`}`);
+}
+
+/**
+ * The live document as text: the editor's own nodes and its caret anchors left out,
+ * nothing parsed and nothing formatted.
+ *
+ * `canonicalText()` runs `format()` over the whole document, which costs 18–177 ms per
+ * keystroke on a large one (measured, Chromium); a snapshot has to be cheaper than the
+ * edit it guards. It is run through `format()` when it is restored instead.
+ */
+function documentText() {
+  const one = (n) => (n.nodeType === 1 ? n.outerHTML : n.nodeType === 8 ? `<!--${n.textContent}-->` : n.textContent);
+  const head = [...document.head.children].flatMap((n) => (EDITOR_HEAD.has(n) ? [] : [one(n)])).join('\n');
+  const body = [...document.body.childNodes].flatMap((n) => (n === CHROME ? [] : [one(n)])).join('\n');
+  const root = [...document.documentElement.attributes].map((a) => ` ${a.name}="${a.value}"`).join('');
+  return `<!doctype html>\n<html${root}>\n<head>\n${head}\n</head>\n<body>\n${body}\n</body>\n</html>`
+    .split(ZERO).join('');
 }
 
 /**
@@ -4986,17 +5012,24 @@ function undo() {
  * clicking Accept left the selection at (body, 0) and the next keystroke went
  * nowhere.
  */
+/** Every block a caret can live in, in document order (the same set `blockOf` uses). */
+function leafBlocks() {
+  const sel = [...LEAF].join(',');
+  return [...document.body.querySelectorAll(sel)].filter((n) => !CHROME.contains(n));
+}
+
 function caretMark() {
   const range = caretRange();
   const block = range && blockOf(range.startContainer);
   if (!block) return null;
-  const selector = liveSelector(block);
-  if (range.startContainer.nodeType !== 3) return { selector, offset: 0 };
+  const mark = { selector: liveSelector(block), order: leafBlocks().indexOf(block), offset: 0 };
+  if (range.startContainer.nodeType !== 3) return mark;
   const walk = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
   let offset = 0;
   for (let n = walk.nextNode(); n && n !== range.startContainer; n = walk.nextNode()) offset += n.length;
-  if (walk.currentNode !== range.startContainer) return { selector, offset: 0 };
-  return { selector, offset: offset + range.startOffset };
+  if (walk.currentNode !== range.startContainer) return mark;
+  mark.offset = offset + range.startOffset;
+  return mark;
 }
 
 /** Put the caret back at `mark`, if the block it named is still in the document. */
@@ -5004,6 +5037,12 @@ function restoreCaret(mark) {
   if (!mark) return;
   let block = null;
   try { block = document.querySelector(mark.selector); } catch { /* an id with a quote in it */ }
+  if (block && CHROME.contains(block)) block = null;
+  // The block may be gone (the change we are undoing removed it) or have moved: fall
+  // back to the block that is in its place, then to the last one. Never leave the
+  // caret loose in <body>, where a keystroke goes nowhere.
+  const blocks = leafBlocks();
+  if (!block) block = blocks[mark.order] ?? blocks[blocks.length - 1] ?? blocks[0] ?? null;
   if (!block) return;
   let left = mark.offset;
   const walk = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
@@ -5017,14 +5056,20 @@ function restoreCaret(mark) {
 /** Mutate the document tree and show the result. `fn(tree)` gets the #root. */
 function mutate(fn) {
   const keep = caretMark();
+  const before = documentText();
   const { text: src } = canonicalText();
-  snapshot(src);
   const tree = parse(src).root;
   const result = fn(tree);
-  applyDocument(serialize(tree));
-  state.dirty = true;
-  refresh();
-  restoreCaret(keep);
+  const next = serialize(tree);
+  // A command that changed nothing (Accept with nothing to fold) is not an edit: no
+  // history entry, no re-render, and the document does not become unsaved.
+  if (next !== src) {
+    snapshot(before);
+    applyDocument(next);
+    state.dirty = true;
+    refresh();
+    restoreCaret(keep);
+  }
   return result;
 }
 
@@ -5040,6 +5085,7 @@ async function openText(name, src, handle = null) {
   state.handle = handle;
   state.dirty = false;
   state.undo.length = 0;
+  state.savedText = canonical;
   applyDocument(canonical);
   const note = canonical === src ? 'already canonical' : 'rewritten to canonical form';
   status(`opened ${state.name} (${note}, ${warnings.length} warning(s))`);
@@ -5099,6 +5145,7 @@ async function save() {
     how = `downloaded ${state.name} (${err.message})`;
   }
   state.dirty = false;
+  state.savedText = src;
   status(`${how} — ${bytes} bytes, ${warnings.length} warning(s)`);
   if (warnings.length) console.info('neodoc: save warnings', warnings);
   refresh();
@@ -6060,6 +6107,7 @@ document.addEventListener('drop', async (e) => {
     const plain = e.dataTransfer?.getData('text/plain');
     if (!html && !plain) return;
     e.preventDefault();
+    snapshot(); // a dropped fragment is an edit like any other
     if (html) return insertNodes(sanitizedNodes(html));
     return insertInline(plain.split('\n').flatMap((line, i) => (i ? [h('br'), text(line)] : [text(line)])));
   }

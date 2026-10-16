@@ -360,6 +360,8 @@ test('a figure survives only when markdown can express all of it', () => {
     '<figure><img alt="c" src="c.png"></figure>',
     '<figure><img alt="c" src="c.png"><figcaption></figcaption></figure>',
     '<figure><img alt="c" src="c.png"><figcaption>a * b</figcaption></figure>',
+    '<figure><img alt="c" src="c.png"><figcaption id="i">cap</figcaption></figure>',
+    '<figure><figcaption>cap</figcaption><img alt="c" src="c.png"></figure>',
     '<figure><img alt="c" src="c.png"><figcaption>a<br>b</figcaption></figure>',
   ];
   for (const c of cases) assert.equal(roundTrip(c).got, canon(c), c);
@@ -368,4 +370,14 @@ test('a figure survives only when markdown can express all of it', () => {
 test('a fence info string that is not one word goes out as raw HTML', () => {
   assert.equal(roundTrip('<pre data-lang="c sharp">int x;</pre>').got, canon('<pre data-lang="c sharp">int x;</pre>'));
   assert.match(roundTrip('<pre data-lang="js">a</pre>').md, /^```js/);
+});
+
+test('a column is only a pipe table when every cell agrees on its alignment', () => {
+  // The delimiter row aligns a whole column: one aligned cell would come back
+  // aligned on every cell of that column.
+  const lone = '<table><thead><tr><th>h</th></tr></thead><tbody><tr><td data-align="right">d</td></tr></tbody></table>';
+  assert.equal(roundTrip(lone).got, canon(lone));
+  const uniform = '<table><thead><tr><th data-align="right">h</th></tr></thead><tbody><tr><td data-align="right">d</td></tr></tbody></table>';
+  assert.match(roundTrip(uniform).md, /^\| h \|\n\| --: \|/, 'a uniform column keeps the pipe table');
+  assert.equal(roundTrip(uniform).got, canon(uniform));
 });
