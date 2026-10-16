@@ -358,6 +358,7 @@ function cmdNote(args) {
   }
   if (sub === 'add') {
     if (args.flags.say === undefined) throw new Error('note add: needs --say "text"');
+    if (args.flags.on === '') throw new Error('note add: --on needs a selector (leave it out to annotate the whole block)');
     const info = addComment(doc.html, {
       body: doc.html,
       selector,
