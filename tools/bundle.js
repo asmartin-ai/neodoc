@@ -22,7 +22,9 @@ const IMPORT = /^import\s+\{([^}]*)\}\s+from\s+'([^']+)';\s*$/gm;
 const EXPORT_DECL = /^export\s+(?:async\s+)?(?:function\s*\*?|const|let|var|class)\s+([A-Za-z0-9_$]+)/gm;
 const EXPORT_LIST = /^export\s*\{([^}]*)\}\s*;?\s*$/gm;
 
-const idOf = (path) => relative(ROOT, path).replace(/\.js$/, '');
+// Module ids must be identical on every OS: `path.relative` yields backslashes on
+// Windows, which would make the generated page differ byte-for-byte by platform.
+const idOf = (path) => relative(ROOT, path).replace(/\\/g, '/').replace(/\.js$/, '');
 
 function readModule(path, ordered, seen, stack = new Set()) {
   if (seen.has(path)) return;
