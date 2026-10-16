@@ -49,7 +49,9 @@ test('after an undo the next keystroke lands in the block it was in', async ({ p
   // place, not loose in <body> (where the keystroke used to go nowhere) and not in the
   // first paragraph (where it used to land once the caret fell back to the body).
   await page.keyboard.type('y');
-  await expect(page.locator('body > p').nth(2)).toContainText('y');
+  // At the end of the block that took its place — not after "th", where a reused
+  // offset from the vanished block used to land.
+  await expect(page.locator('body > p').nth(2)).toHaveText('threey');
   await expect(page.locator('body > p').first()).not.toContainText('y');
   expectClean(noise);
 });

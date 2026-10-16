@@ -38,6 +38,8 @@ ${extra}  </body>
 
 const SCRIPT_DOC = harness('    <p>Looks harmless.</p>', "    <script>window.__pwned = 'ran';</script>\n");
 const LINK_DOC = harness('    <p><a href="javascript:window.__clicked = 1">click me</a></p>');
+// The same scheme with a tab inside it, which the parser removes before resolving.
+const TAB_LINK_DOC = harness('    <p><a href="java&#9;script:window.__clicked = 1">click me</a></p>');
 
 test('a served document cannot run its own script', async ({ page }) => {
   const dir = await tmpDir();
@@ -84,6 +86,15 @@ test('an executable link does not run, and a safe document still opens', async (
   await page.goto(SERVERLESS_EDITOR);
   await page.waitForFunction(() => !!window.neodocEditor);
   await page.setInputFiles('#open-input', unsafe);
+  await expect(page.locator('body > p a')).toHaveText('click me');
+  await page.locator('body > p a').click();
+  expect(await page.evaluate(() => window.__clicked)).toBeUndefined();
+  await expect(page.locator('#st-state')).toContainText(/executable URL/i);
+  // The same scheme with a tab inside it: the parser removes tab/LF/CR from a URL
+  // before resolving it, so the check has to remove them too.
+  const tabbed = join(dir, 'tabs.nd.html');
+  await writeFile(tabbed, TAB_LINK_DOC);
+  await page.setInputFiles('#open-input', tabbed);
   await expect(page.locator('body > p a')).toHaveText('click me');
   await page.locator('body > p a').click();
   expect(await page.evaluate(() => window.__clicked)).toBeUndefined();
@@ -144,5 +155,24 @@ test('a document cannot retarget the editor page through its head', async ({ pag
   await page.waitForTimeout(400); // a refresh would have fired by now
   expect(page.url()).toContain('neodoc-editor.html');
   expect(outside.filter((u) => !u.includes('/doc'))).toEqual([]);
+  expectClean(noise);
+});
+
+test('a script inside a <template> is still executable content here', async ({ page }) => {
+  const dir = await tmpDir();
+  const file = join(dir, 'template.nd.html');
+  // A `<template>` is inert only while its children are in `.content`, which is where
+  // the HTML *parser* puts them. This editor builds elements with `createElement` and
+  // `append`, and a child appended to a created template is a normal, *connected* node:
+  // measured, the script runs. So the walk descends into templates like anywhere else.
+  await writeFile(file, harness('    <template><script>window.__tplran = 1;</script></template>\n    <p>Fine.</p>'));
+  const noise = watchPage(page);
+
+  await page.goto(SERVERLESS_EDITOR);
+  await page.waitForFunction(() => !!window.neodocEditor);
+  await page.setInputFiles('#open-input', file);
+  await expect(page.locator('#st-state')).toContainText(/refused/i);
+  expect(await page.evaluate(() => window.__tplran)).toBeUndefined();
+  expect(await page.evaluate(() => document.body.querySelectorAll('script').length)).toBe(0);
   expectClean(noise);
 });

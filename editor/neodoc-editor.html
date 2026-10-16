@@ -4738,6 +4738,9 @@ const UNSAFE_IN_BODY = new Set(['script', 'style', 'link', 'base', 'meta', 'ifra
  * http-equiv="refresh" content="0;url=http://…">` survives `fmt` and Chromium navigates
  * the editor away. A `<script>` or `<link>` never reaches this page either way.
  */
+/** Does this URL use a scheme that runs or loads in *this* page? */
+const executableUrl = (href) => /^\s*(javascript|vbscript|data):/i.test(href.replace(/[\t\n\r]/g, ''));
+
 function safeFromHead(node) {
   if (node.name === 'title') return true;
   return node.name === 'meta' && (node.attrs || {}).charset !== undefined;
@@ -5042,8 +5045,14 @@ function restoreCaret(mark) {
   // back to the block that is in its place, then to the last one. Never leave the
   // caret loose in <body>, where a keystroke goes nowhere.
   const blocks = leafBlocks();
-  if (!block) block = blocks[mark.order] ?? blocks[blocks.length - 1] ?? blocks[0] ?? null;
-  if (!block) return;
+  if (!block) {
+    // The block is gone (the change being undone removed it) or it moved. The old
+    // character offset means nothing in a different block, so the caret goes to the
+    // end of the one that took its place — never loose in <body>, never mid-word.
+    const took = blocks[mark.order] ?? blocks[blocks.length - 1] ?? blocks[0] ?? null;
+    if (took) caretEndOf(took);
+    return;
+  }
   let left = mark.offset;
   const walk = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
   for (let n = walk.nextNode(); n; n = walk.nextNode()) {
@@ -5098,10 +5107,12 @@ async function loadServed() {
   try {
     const res = await fetch('/doc');
     if (!res.ok) {
-      // The server refuses a document it cannot hand over intact (see serve.js).
+      // The server refuses a document it cannot hand over intact (see serve.js). The
+      // reason is the status line, so the boot must not replace it with "no file open".
       const why = res.headers.get('content-type')?.includes('json') ? (await res.json()).error : null;
-      if (why) status(why);
-      return false;
+      if (!why) return false;
+      status(why);
+      return why;
     }
     const doc = await res.json();
     state.mode = doc.mode === 'none' ? 'none' : 'inline';
@@ -5744,7 +5755,9 @@ function sanitizeTree(node) {
       const href = attrs.href || '';
       // Only navigable URLs survive; javascript:/data: hrefs would be behaviour.
       const ok = /^(https?:|mailto:|#|\/|\.)/i.test(href) || /^[\w.~-]+(\/|$)/.test(href);
-      if (!ok || /^\s*(javascript|vbscript|data):/i.test(href)) delete attrs.href;
+      // The HTML parser removes tab/LF/CR from a URL before resolving it, so the
+      // check has to see `java\tscript:` as `javascript:`.
+      if (!ok || executableUrl(href)) delete attrs.href;
       if (!attrs.href && !attrs.id) { kids.push(...(c.children || [])); continue; }
     }
     if (name === 'img') {
@@ -6121,7 +6134,7 @@ document.addEventListener('drop', async (e) => {
 // ------------------------------------------------------------------------ boot
 
 sweepEditorNodes();
-if (!(await loadServed())) {
+if ((await loadServed()) === false) {
   status('no file open — Open a .nd.html (or drop one in); Save writes through the browser file handle when available, else downloads it');
 }
 if (!blocksInBody().length) document.body.prepend(h('p'));
@@ -6130,7 +6143,7 @@ refresh();
 // this page rather than opening somewhere else.
 document.addEventListener('click', (e) => {
   const hit = e.target instanceof Element ? e.target.closest('a[href]') : null;
-  if (hit && /^\s*(javascript|vbscript|data):/i.test(hit.getAttribute('href') || '')) {
+  if (hit && executableUrl(hit.getAttribute('href') || '')) {
     e.preventDefault();
     status('refused a link with an executable URL');
   }
