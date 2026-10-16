@@ -153,6 +153,32 @@ downloading the file (and `neodoc serve` gives in-place saving there instead).
 `CompressionStream('deflate-raw')` is missing on older runtimes, so docx export
 falls back to stored (uncompressed) zip entries. Both branches are tested.
 
+## Runtime and packaging
+
+`neodoc` is plain ESM with zero runtime dependencies, so it runs as-is on Node
+(≥ 20), Bun, and any bundle of the same modules. Nothing needs installing,
+transpiling or bundling:
+
+```bash
+node bin/neodoc.js fmt --check report.nd.html
+bun  bin/neodoc.js fmt --check report.nd.html
+```
+
+Bun can also compile the CLI to one standalone binary per platform — no Node
+required on the target machine, and cross-compilation works from any OS:
+
+```bash
+bun build --compile --target=bun-linux-x64     bin/neodoc.js --outfile neodoc-linux-x64
+bun build --compile --target=bun-darwin-arm64  bin/neodoc.js --outfile neodoc-macos-arm64
+bun build --compile --target=bun-windows-x64   bin/neodoc.js --outfile neodoc.exe
+```
+
+The browser editor is the same story in reverse: `tools/bundle.js` inlines
+`editor/` + its `src/*.js` import closure into one self-contained page
+(`editor/neodoc-editor.html`) that runs from `file://` with no server. Porting the
+format itself to another language is a documented protocol, not guesswork —
+[docs/PORTING.md](docs/PORTING.md) plus the `fixtures/` corpus.
+
 ## Testing
 
 ```bash
