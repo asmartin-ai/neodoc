@@ -362,7 +362,10 @@ function cmdId(args) {
   const [hit] = bodyHits(doc, selector);
   // Walk the tree rather than build `[id="…"]`: an id may hold a quote, and the
   // selector engine has no way to escape one inside an attribute value.
-  const taken = descendants(doc.html).some((n) => n.type === 'element' && n.attrs && n.attrs.id === String(id));
+  let taken = false;
+  for (const n of descendants(doc.html)) {
+    if (n.type === 'element' && n.attrs && n.attrs.id === String(id)) { taken = true; break; }
+  }
   if (taken) throw new Error(`id "${id}" is already used`);
   hit.node.attrs.id = String(id);
   saveDoc(doc);

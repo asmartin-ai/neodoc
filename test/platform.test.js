@@ -69,3 +69,20 @@ test('the fixtures lint clean on any host', () => {
     assert.deepEqual(findings, [], `${name} lints dirty`);
   }
 });
+
+test('no source relies on iterator helpers (Node 22+ only)', () => {
+  // `descendants(...).some(...)` worked on the machine it was written on and threw
+  // "not a function" on Node 20: `.some`/`.map`/… *on a generator* need Node 22's
+  // iterator helpers, and this project supports Node 20. Iterate or spread instead.
+  const generators = /(?:descendants|walk|walkAll|textNodesIn|childrenOf)\([^)]*\)\s*\.\s*(?:map|filter|some|every|forEach|find|findIndex|reduce|take|drop|toArray|flatMap)\(/;
+  const files = [
+    ...readdirSync(join(ROOT, 'src')).map((f) => `src/${f}`),
+    ...readdirSync(join(ROOT, 'editor')).filter((f) => f.endsWith('.js')).map((f) => `editor/${f}`),
+    'tools/bundle.js',
+  ];
+  for (const file of files) {
+    const source = codeOnly(readFileSync(join(ROOT, file), 'utf8'));
+    const hit = generators.exec(source);
+    assert.equal(hit, null, `${file}: ${hit && hit[0]} needs Node 22's iterator helpers`);
+  }
+});

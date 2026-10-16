@@ -113,6 +113,7 @@ test('a block command keeps a list item a list item', async ({ page }) => {
   await page.goto(SERVERLESS_EDITOR);
   await page.waitForFunction(() => !!window.neodocEditor);
   await page.setInputFiles('#open-input', file);
+  await expect(page.locator('li')).toHaveText('x'); // the open is asynchronous
 
   await page.locator('li').click();
   await page.locator('button[data-cmd="h1"]').click();
@@ -137,6 +138,7 @@ test('an inline command refuses a selection that spans blocks', async ({ page })
   await page.goto(SERVERLESS_EDITOR);
   await page.waitForFunction(() => !!window.neodocEditor);
   await page.setInputFiles('#open-input', file);
+  await expect(page.locator('body > p')).toHaveCount(2); // the open is asynchronous
 
   await page.evaluate(() => {
     const ps = document.querySelectorAll('body > p');
@@ -169,6 +171,7 @@ test('Tab does not build a container out of a bare list item', async ({ page }) 
   await page.goto(SERVERLESS_EDITOR);
   await page.waitForFunction(() => !!window.neodocEditor);
   await page.setInputFiles('#open-input', file);
+  await expect(page.locator('li')).toHaveText('bare'); // the open is asynchronous
 
   await page.locator('li').click();
   await page.keyboard.press('Tab');
