@@ -3147,7 +3147,7 @@ await (async function () {
 // queries visible in `neodoc bench`. No `an+b`, `:nth-last-child`, `:has` —
 // the vocabulary does not need them.
 
-const {descendants, isEl, pathOf, walk} = __mods["src/tree"];
+const {descendants, isEl, pathOf} = __mods["src/tree"];
 const WS = /\s/;
 const IDENT_CH = /[A-Za-z0-9_-]/;
 
@@ -3325,18 +3325,54 @@ function parseSelector(text) {
 
 // ------------------------------------------------------------------ matching
 
-function parentMap(root) {
-  const map = new Map();
-  walk(root, (node) => {
-    for (const child of node.children || []) map.set(child, node);
-  });
-  return map;
+/**
+ * Parent lookup for the whole tree (one map insert per node) plus a per-parent
+ * cache of child positions, built the first time a selector asks about that
+ * parent. Matching therefore stays linear: the old engine re-scanned a parent's
+ * children — and ran `indexOf` — for every node, so `p:nth-child(1)` over 20,000
+ * sibling paragraphs took 9.3s and `td:nth-of-type(3)` over 20,000 cells took 3.1s.
+ */
+function buildIndex(root) {
+  const parent = new Map();
+  const stack = [root];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    for (const child of node.children || []) {
+      parent.set(child, node);
+      stack.push(child);
+    }
+  }
+  return { parent, siblings: new Map() };
 }
 
-const elementChildren = (parent) =>
-  (parent && parent.children ? parent.children.filter((c) => isEl(c)) : []);
+const NO_SIBLINGS = { index: new Map(), elem: new Map(), count: -1, type: new Map() };
 
-function matchCompound(node, compound, parents) {
+/** Child positions within `parent`, computed once per parent on demand. */
+function siblingsOf(idx, parent) {
+  if (!parent) return NO_SIBLINGS;
+  const cached = idx.siblings.get(parent);
+  if (cached) return cached;
+  const index = new Map();
+  const elem = new Map();
+  const type = new Map();
+  const seen = new Map();
+  const kids = parent.children || [];
+  let elements = 0;
+  for (let i = 0; i < kids.length; i++) {
+    const child = kids[i];
+    index.set(child, i);
+    if (!isEl(child)) continue;
+    elem.set(child, elements++);
+    const before = seen.get(child.name) ?? 0;
+    type.set(child, before);
+    seen.set(child.name, before + 1);
+  }
+  const entry = { index, elem, count: elements, type };
+  idx.siblings.set(parent, entry);
+  return entry;
+}
+
+function matchCompound(node, compound, idx) {
   if (compound.tag && compound.tag !== '*' && node.name !== compound.tag) return false;
   const attrs = node.attrs || {};
   if (compound.id !== null && attrs.id !== compound.id) return false;
@@ -3349,35 +3385,34 @@ function matchCompound(node, compound, parents) {
     else if (attr.op === '*=' && !value.includes(attr.value)) return false;
   }
   if (!compound.pseudos.length) return true;
-  const siblings = elementChildren(parents.get(node));
+  const sib = siblingsOf(idx, idx.parent.get(node));
   for (const pseudo of compound.pseudos) {
     if (pseudo.name === 'not') {
-      if (matchCompound(node, pseudo.arg, parents)) return false;
+      if (matchCompound(node, pseudo.arg, idx)) return false;
     } else if (pseudo.name === 'first-child') {
-      if (siblings[0] !== node) return false;
+      if (sib.elem.get(node) !== 0) return false;
     } else if (pseudo.name === 'last-child') {
-      if (siblings[siblings.length - 1] !== node) return false;
+      if (sib.elem.get(node) !== sib.count - 1) return false;
     } else if (pseudo.name === 'nth-child') {
-      if (siblings[pseudo.arg - 1] !== node) return false;
+      if (sib.elem.get(node) !== pseudo.arg - 1) return false;
     } else if (pseudo.name === 'nth-of-type') {
-      const sameTag = siblings.filter((c) => c.name === node.name);
-      if (sameTag[pseudo.arg - 1] !== node) return false;
+      if (sib.type.get(node) !== pseudo.arg - 1) return false;
     }
   }
   return true;
 }
 
 /** Right-to-left: the rightmost compound must match `node`, then walk leftwards up. */
-function matchesComplex(node, parents, parts, k) {
-  if (!matchCompound(node, parts[k].compound, parents)) return false;
+function matchesComplex(node, idx, parts, k) {
+  if (!matchCompound(node, parts[k].compound, idx)) return false;
   if (k === 0) return true;
-  let parent = parents.get(node);
+  let parent = idx.parent.get(node);
   if (parts[k].combinator === 'child') {
-    return !!parent && isEl(parent) && matchesComplex(parent, parents, parts, k - 1);
+    return !!parent && isEl(parent) && matchesComplex(parent, idx, parts, k - 1);
   }
   while (parent && isEl(parent)) {
-    if (matchesComplex(parent, parents, parts, k - 1)) return true;
-    parent = parents.get(parent);
+    if (matchesComplex(parent, idx, parts, k - 1)) return true;
+    parent = idx.parent.get(parent);
   }
   return false;
 }
@@ -3390,9 +3425,9 @@ const isBareBody = (sel) =>
     return c.tag === 'body' && c.id === null && !c.attrs.length && !c.pseudos.length;
   })();
 
-function hit(node, parents) {
-  const parent = parents.get(node) || null;
-  return { node, parent, index: parent ? parent.children.indexOf(node) : -1 };
+function hit(node, idx) {
+  const parent = idx.parent.get(node) ?? null;
+  return { node, parent, index: parent ? siblingsOf(idx, parent).index.get(node) ?? -1 : -1 };
 }
 
 /**
@@ -3402,19 +3437,19 @@ function hit(node, parents) {
 function queryAll(root, selectorText) {
   const sel = selectorText && selectorText.groups ? selectorText : parseSelector(selectorText);
   if (!sel || !sel.groups) throw new Error('selector must be a string or parseSelector() result');
-  const parents = parentMap(root);
+  const idx = buildIndex(root);
   const out = [];
   if (isBareBody(sel)) {
     let body = isEl(root, 'body') ? root : null;
     if (!body) for (const node of descendants(root)) if (isEl(node, 'body')) { body = node; break; }
-    if (body) out.push(hit(body, parents));
+    if (body) out.push(hit(body, idx));
     return out;
   }
   for (const node of descendants(root)) {
     if (!isEl(node)) continue;
     for (const parts of sel.groups) {
-      if (matchesComplex(node, parents, parts, parts.length - 1)) {
-        out.push(hit(node, parents));
+      if (matchesComplex(node, idx, parts, parts.length - 1)) {
+        out.push(hit(node, idx));
         break;
       }
     }
@@ -4607,6 +4642,14 @@ const CONTAINER = new Set(['ul', 'ol', 'blockquote', 'section', 'aside', 'figure
 // unwrapped (kept as its children) so a paste can never inject behaviour.
 const PASTE_DROP = new Set(['script', 'style', 'iframe', 'object', 'embed', 'form', 'input',
   'button', 'video', 'audio', 'svg', 'link', 'base', 'meta', 'title', 'head', 'body', 'html', 'template']);
+// A document is untrusted input too, and these do something just by entering this
+// page's DOM: run script, fetch a stylesheet, retarget every URL, or reload. `fmt`
+// keeps them (they are content) and `lint` reports them, so a document containing
+// one is refused here instead of being loaded — see README "Threat model".
+const UNSAFE_IN_BODY = new Set(['script', 'style', 'link', 'base', 'meta', 'iframe', 'object', 'embed']);
+// Elements `applyDocument` may adopt from a document's head; anything else is
+// reported and left out, so a head <script> never reaches this page.
+const SAFE_FROM_HEAD = new Set(['meta', 'title', 'style']);
 
 const state = { name: 'untitled.nd.html', mode: 'inline', dirty: false, served: false, handle: null, suggest: false, embed: true };
 
@@ -4701,6 +4744,21 @@ function status(message) {
   $('#st-state').textContent = message;
 }
 
+/** Body elements this page must not adopt, by name. */
+function unsafeBodyElements(root) {
+  const found = new Set();
+  (function walk(node) {
+    for (const c of node.children || []) {
+      if (c.type !== 'element') continue;
+      const name = RENAMES[c.name] || String(c.name).toLowerCase();
+      if (name === 'head') continue;
+      if (UNSAFE_IN_BODY.has(name)) found.add(name);
+      walk(c);
+    }
+  })(root);
+  return [...found];
+}
+
 // ------------------------------------------------------- canonicalization / IO
 
 function headOf(root) {
@@ -4745,7 +4803,8 @@ function applyDocument(src) {
   const body = html && (html.children || []).find((c) => c.name === 'body');
   state.mode = head && head.children.some((c) => c.name === 'style') ? 'inline' : 'none';
   for (const n of [...document.head.children]) if (!EDITOR_HEAD.has(n)) n.remove();
-  document.head.append(...(head ? head.children.map(treeToDom).filter(Boolean) : []), ...EDITOR_HEAD);
+  const adoptable = (head ? head.children : []).filter((c) => c.type === 'element' && SAFE_FROM_HEAD.has(c.name));
+  document.head.append(...adoptable.map(treeToDom).filter(Boolean), ...EDITOR_HEAD);
   for (const a of [...document.documentElement.attributes]) {
     if (!(a.name in ((html && html.attrs) || {}))) document.documentElement.removeAttribute(a.name);
   }
@@ -4789,6 +4848,12 @@ function mutate(fn) {
 
 async function openText(name, src, handle = null) {
   const { text: canonical, warnings } = format(src, { style: modeOfText(src) });
+  const unsafe = unsafeBodyElements(parse(canonical).root);
+  if (unsafe.length) {
+    status(`refused ${name}: <${unsafe.join('>, <')}> in the body can run or fetch in this page — remove it with another tool, then open it here`);
+    console.warn('neodoc: refused to open', name, '— body contains', unsafe);
+    return false;
+  }
   state.name = name || state.name;
   state.handle = handle;
   state.dirty = false;
@@ -5773,11 +5838,21 @@ document.addEventListener('keydown', (e) => {
   }
 });
 document.addEventListener('dragover', (e) => {
-  if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) e.preventDefault();
+  const types = e.dataTransfer ? [...e.dataTransfer.types] : [];
+  if (types.includes('Files') || types.includes('text/html') || types.includes('text/plain')) e.preventDefault();
 });
 document.addEventListener('drop', async (e) => {
   const files = e.dataTransfer ? [...e.dataTransfer.files] : [];
-  if (!files.length) return;
+  if (!files.length) {
+    // A dropped fragment is pasted content, so it goes through the paste
+    // sanitizer: the browser would otherwise insert its markup verbatim.
+    const html = e.dataTransfer?.getData('text/html');
+    const plain = e.dataTransfer?.getData('text/plain');
+    if (!html && !plain) return;
+    e.preventDefault();
+    if (html) return insertNodes(sanitizedNodes(html));
+    return insertInline(plain.split('\n').flatMap((line, i) => (i ? [h('br'), text(line)] : [text(line)])));
+  }
   e.preventDefault();
   const image = files.find((f) => f.type.startsWith('image/'));
   if (image) return insertImage(image);
@@ -5793,6 +5868,15 @@ if (!(await loadServed())) {
 }
 if (!blocksInBody().length) document.body.prepend(h('p'));
 refresh();
+// A document's links are content, but an executable scheme navigates or runs in
+// this page rather than opening somewhere else.
+document.addEventListener('click', (e) => {
+  const hit = e.target instanceof Element ? e.target.closest('a[href]') : null;
+  if (hit && /^\s*(javascript|vbscript|data):/i.test(hit.getAttribute('href') || '')) {
+    e.preventDefault();
+    status('refused a link with an executable URL');
+  }
+});
 window.addEventListener('beforeunload', (e) => {
   if (state.dirty) e.preventDefault();
 });

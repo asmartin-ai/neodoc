@@ -47,6 +47,14 @@ const CONTAINER = new Set(['ul', 'ol', 'blockquote', 'section', 'aside', 'figure
 // unwrapped (kept as its children) so a paste can never inject behaviour.
 const PASTE_DROP = new Set(['script', 'style', 'iframe', 'object', 'embed', 'form', 'input',
   'button', 'video', 'audio', 'svg', 'link', 'base', 'meta', 'title', 'head', 'body', 'html', 'template']);
+// A document is untrusted input too, and these do something just by entering this
+// page's DOM: run script, fetch a stylesheet, retarget every URL, or reload. `fmt`
+// keeps them (they are content) and `lint` reports them, so a document containing
+// one is refused here instead of being loaded — see README "Threat model".
+const UNSAFE_IN_BODY = new Set(['script', 'style', 'link', 'base', 'meta', 'iframe', 'object', 'embed']);
+// Elements `applyDocument` may adopt from a document's head; anything else is
+// reported and left out, so a head <script> never reaches this page.
+const SAFE_FROM_HEAD = new Set(['meta', 'title', 'style']);
 
 const state = { name: 'untitled.nd.html', mode: 'inline', dirty: false, served: false, handle: null, suggest: false, embed: true };
 
@@ -141,6 +149,21 @@ function status(message) {
   $('#st-state').textContent = message;
 }
 
+/** Body elements this page must not adopt, by name. */
+function unsafeBodyElements(root) {
+  const found = new Set();
+  (function walk(node) {
+    for (const c of node.children || []) {
+      if (c.type !== 'element') continue;
+      const name = RENAMES[c.name] || String(c.name).toLowerCase();
+      if (name === 'head') continue;
+      if (UNSAFE_IN_BODY.has(name)) found.add(name);
+      walk(c);
+    }
+  })(root);
+  return [...found];
+}
+
 // ------------------------------------------------------- canonicalization / IO
 
 function headOf(root) {
@@ -185,7 +208,8 @@ function applyDocument(src) {
   const body = html && (html.children || []).find((c) => c.name === 'body');
   state.mode = head && head.children.some((c) => c.name === 'style') ? 'inline' : 'none';
   for (const n of [...document.head.children]) if (!EDITOR_HEAD.has(n)) n.remove();
-  document.head.append(...(head ? head.children.map(treeToDom).filter(Boolean) : []), ...EDITOR_HEAD);
+  const adoptable = (head ? head.children : []).filter((c) => c.type === 'element' && SAFE_FROM_HEAD.has(c.name));
+  document.head.append(...adoptable.map(treeToDom).filter(Boolean), ...EDITOR_HEAD);
   for (const a of [...document.documentElement.attributes]) {
     if (!(a.name in ((html && html.attrs) || {}))) document.documentElement.removeAttribute(a.name);
   }
@@ -229,6 +253,12 @@ function mutate(fn) {
 
 async function openText(name, src, handle = null) {
   const { text: canonical, warnings } = format(src, { style: modeOfText(src) });
+  const unsafe = unsafeBodyElements(parse(canonical).root);
+  if (unsafe.length) {
+    status(`refused ${name}: <${unsafe.join('>, <')}> in the body can run or fetch in this page — remove it with another tool, then open it here`);
+    console.warn('neodoc: refused to open', name, '— body contains', unsafe);
+    return false;
+  }
   state.name = name || state.name;
   state.handle = handle;
   state.dirty = false;
@@ -1213,11 +1243,21 @@ document.addEventListener('keydown', (e) => {
   }
 });
 document.addEventListener('dragover', (e) => {
-  if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) e.preventDefault();
+  const types = e.dataTransfer ? [...e.dataTransfer.types] : [];
+  if (types.includes('Files') || types.includes('text/html') || types.includes('text/plain')) e.preventDefault();
 });
 document.addEventListener('drop', async (e) => {
   const files = e.dataTransfer ? [...e.dataTransfer.files] : [];
-  if (!files.length) return;
+  if (!files.length) {
+    // A dropped fragment is pasted content, so it goes through the paste
+    // sanitizer: the browser would otherwise insert its markup verbatim.
+    const html = e.dataTransfer?.getData('text/html');
+    const plain = e.dataTransfer?.getData('text/plain');
+    if (!html && !plain) return;
+    e.preventDefault();
+    if (html) return insertNodes(sanitizedNodes(html));
+    return insertInline(plain.split('\n').flatMap((line, i) => (i ? [h('br'), text(line)] : [text(line)])));
+  }
   e.preventDefault();
   const image = files.find((f) => f.type.startsWith('image/'));
   if (image) return insertImage(image);
@@ -1233,6 +1273,15 @@ if (!(await loadServed())) {
 }
 if (!blocksInBody().length) document.body.prepend(h('p'));
 refresh();
+// A document's links are content, but an executable scheme navigates or runs in
+// this page rather than opening somewhere else.
+document.addEventListener('click', (e) => {
+  const hit = e.target instanceof Element ? e.target.closest('a[href]') : null;
+  if (hit && /^\s*(javascript|vbscript|data):/i.test(hit.getAttribute('href') || '')) {
+    e.preventDefault();
+    status('refused a link with an executable URL');
+  }
+});
 window.addEventListener('beforeunload', (e) => {
   if (state.dirty) e.preventDefault();
 });
