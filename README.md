@@ -142,7 +142,7 @@ JavaScript that runs on any modern Node (≥ 20), Bun, and every browser engine.
 | | Covered |
 |---|---|
 | **OS** | Linux, macOS, Windows — CLI, conformance corpus and docx/markdown conversion run on all three in CI (Node 20/22/24 × 3 OSes = 9 jobs) |
-| **Engines** | Blink (Chromium), Gecko (Firefox), WebKit — the editor's end-to-end suite runs on all three, on Linux and macOS, plus Android/iOS viewport profiles |
+| **Engines** | Blink (Chromium), Gecko (Firefox), WebKit — the editor's end-to-end suite runs on all three, on Linux and macOS, plus Android/iOS viewport profiles, plus the branded **Chrome** and **Edge** builds where the CI image ships them |
 | **Browser brands** | Chrome, Edge, Brave, Opera, Vivaldi, Arc share Blink; LibreWolf, Waterfox, Tor Browser share Gecko; Safari, every iOS browser, GNOME Web share WebKit. Engine behaviour transfers; **API availability does not** |
 | **Hardened / older builds** | The `fallbacks` spec deletes the optional APIs (`showOpenFilePicker`, `showSaveFilePicker`, `navigator.clipboard`, `CompressionStream`) before page load and asserts the degraded path works in every engine |
 | **Not covered** | Real devices, OS input quirks, and vendor hardening beyond feature detection — those need a device farm (BrowserStack or similar), which this project does not require to build or test |
@@ -160,7 +160,8 @@ npm test                              # 100 Node tests: core, CLI, conformance, 
 npm run lint                          # oxlint with the vendored anti-slop rules
 node tools/bundle.js --check          # the generated editor page is in sync
 npx playwright install chromium firefox webkit
-npm run test:e2e                      # editor end to end in all engines + 2 mobile profiles
+npm run test:e2e                      # editor end to end: chromium, firefox, webkit,
+                                      #   mobile-chrome, mobile-safari, chrome, edge
 npm run test:e2e -- --project=webkit  # one engine
 ```
 
