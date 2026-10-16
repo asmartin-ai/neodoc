@@ -54,6 +54,20 @@ function isKnownFlag(token) {
   return BOOLEAN_FLAGS.has(token.replace(/^--?/, '').split('=')[0]) || VALUE_FLAGS.has(token.replace(/^--?/, '').split('=')[0]);
 }
 
+/** Read a text file (or stdin) as UTF-8, refusing bytes that are not UTF-8: the
+ *  decoder would turn each of them into U+FFFD, and writing that back destroys the
+ *  original bytes for good. */
+function readText(file, label = file) {
+  const bytes = readFileSync(file);
+  const text = bytes.toString('utf8');
+  if (!Buffer.from(text, 'utf8').equals(bytes)) {
+    throw new Error(`${label}: not valid UTF-8 — refusing to replace the undecodable bytes`);
+  }
+  return text;
+}
+
+const readStdin = () => readText(0, '<stdin>');
+
 function parseArgs(argv) {
   const positional = [];
   const flags = {};
@@ -99,7 +113,7 @@ function docFrom(text, mode) {
 }
 
 function openDoc(file) {
-  const raw = readFileSync(file, 'utf8');
+  const raw = readText(file);
   const mode = hasStyle(raw) ? 'inline' : 'none';
   const doc = docFrom(raw, mode);
   const text = serialize(doc.root);
@@ -180,10 +194,10 @@ function fragmentSource(flags) {
   if (flags.md !== undefined && flags.md !== true) return markdown(flags.md);
   if (flags.html !== undefined) return normalizeFragment(String(flags.html));
   if (flags.file) {
-    const text = flags.file === '-' ? readFileSync(0, 'utf8') : readFileSync(String(flags.file), 'utf8');
+    const text = flags.file === '-' ? readStdin() : readText(String(flags.file));
     return maybeMarkdown(text, flags.md === true);
   }
-  if (flags.stdin) return maybeMarkdown(readFileSync(0, 'utf8'), flags.md === true);
+  if (flags.stdin) return maybeMarkdown(readStdin(), flags.md === true);
   throw new Error('needs one of --md, --html, --file, --stdin');
 }
 
@@ -203,7 +217,7 @@ function cmdFmt(args) {
   if (!args.positional.length) return fail('fmt: expected at least one FILE');
   let bad = 0;
   for (const file of args.positional) {
-    const raw = readFileSync(file, 'utf8');
+    const raw = readText(file);
     const { text, warnings } = format(raw, { style: args.flags.style ?? (hasStyle(raw) ? 'inline' : 'none') });
     for (const w of warnings) err(`${file}: ${w}`);
     if (args.flags.check) {
@@ -229,11 +243,11 @@ function cmdLint(args) {
   let bad = 0;
   for (const file of args.positional) {
     if (args.flags.fix) {
-      const raw = readFileSync(file, 'utf8');
+      const raw = readText(file);
       const fixed = format(raw, { style: hasStyle(raw) ? 'inline' : 'none' }).text;
       if (fixed !== raw) writeAtomic(file, fixed);
     }
-    const findings = lint(readFileSync(file, 'utf8')).map((f) => ({ file, ...f }));
+    const findings = lint(readText(file)).map((f) => ({ file, ...f }));
     report.push(...findings);
     if (findings.some((f) => f.severity === 'error')) bad = 1;
   }
@@ -246,7 +260,7 @@ function cmdNew(args) {
   const file = args.positional[0];
   const fromStdin = args.flags.stdin || file === '-';
   const nodes = fromStdin
-    ? markdown(readFileSync(0, 'utf8')).nodes
+    ? markdown(readStdin()).nodes
     : [
       { type: 'element', name: 'h1', attrs: {}, children: [{ type: 'text', text: 'Untitled' }] },
       { type: 'element', name: 'p', attrs: {}, children: [] },
@@ -425,7 +439,7 @@ function foldChanges(args, mode) {
 
 function cmdImport(args) {
   const [source] = args.positional;
-  const text = source && source !== '-' ? readFileSync(source, 'utf8') : readFileSync(0, 'utf8');
+  const text = source && source !== '-' ? readText(source) : readStdin();
   const { nodes, warnings } = markdown(text);
   for (const w of warnings) err(`import: ${w}`);
   const title = firstHeadingText(nodes) ?? (source ? stripExt(basename(source)) : 'Untitled');

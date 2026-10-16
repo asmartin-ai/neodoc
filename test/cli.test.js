@@ -117,3 +117,19 @@ test('a value spelled like a flag name is still a value', () => {
   assert.equal(cli(['add', file, '--after', 'body > p', '--file', target]).status, 0);
   assert.match(readFileSync(file, 'utf8'), /written/, 'a file named `md` is read, not mistaken for --md');
 });
+
+test('a file that is not UTF-8 is refused, never silently repaired', () => {
+  const file = join(mkdtempSync(join(tmpdir(), 'neodoc-cli-')), 'latin1.nd.html');
+  const original = Buffer.concat([
+    Buffer.from('<!doctype html><html><body><p>caf'),
+    Buffer.from([0xe9]),
+    Buffer.from('</p></body></html>'),
+  ]);
+  writeFileSync(file, original);
+  for (const argv of [['fmt', '-w', file], ['lint', file], ['get', file, 'body > p']]) {
+    const res = cli(argv);
+    assert.equal(res.status, 2, `${argv[0]}: ${res.stderr}`);
+    assert.match(res.stderr, /not valid UTF-8/);
+    assert.deepEqual(readFileSync(file), original, `${argv[0]} must leave the bytes alone`);
+  }
+});
