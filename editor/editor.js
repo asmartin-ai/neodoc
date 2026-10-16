@@ -548,7 +548,10 @@ function liveSelector(el) {
     let seg = n.nodeName.toLowerCase();
     // Same rule as src/tree.js `pathOf`: a tag that occurs once among its element
     // siblings needs no positional suffix, so the hint matches `neodoc get --json`.
-    if (n.id) seg += `#${n.id}`;
+    // `#id` only when it addresses exactly this node and parses as a selector: a
+    // duplicated or awkward id would make the printed command edit the wrong element.
+    const unique = n.id && /^[A-Za-z_][-\w]*$/.test(n.id) && document.querySelectorAll(`#${n.id}`).length === 1;
+    if (unique) seg += `#${n.id}`;
     else if (sameTag.length > 1) seg += `:nth-of-type(${sameTag.indexOf(n) + 1})`;
     parts.unshift(seg);
   }

@@ -153,8 +153,25 @@ export function* descendants(node) {
 }
 
 /** Round-trippable selector for `node` under `root`, e.g. `body > p:nth-of-type(1)`. */
+/** Ids that occur more than once: `#id` does not address one node for those. */
+function duplicateIds(root) {
+  const seen = new Set();
+  const dupes = new Set();
+  for (const node of descendants(root)) {
+    const id = node.type === 'element' && node.attrs && node.attrs.id;
+    if (!id) continue;
+    if (seen.has(id)) dupes.add(id);
+    else seen.add(id);
+  }
+  return dupes;
+}
+
+/** Is this id usable as `#id` in a selector: one node, and a plain identifier? */
+const idIsAddressable = (id) => /^[A-Za-z_][-\w]*$/.test(id);
+
 export function pathOf(root, target) {
   const parts = [];
+  const dupes = duplicateIds(root);
   let node = target;
   while (node && node !== root) {
     const parent = (root.children || []).includes(node) ? root : parentOf(root, node);
@@ -163,7 +180,10 @@ export function pathOf(root, target) {
     let seg = node.name;
     // A tag that occurs once among its siblings needs no positional suffix, so
     // `body` stays `body`; only genuinely ambiguous siblings get indexed.
-    if (node.attrs && node.attrs.id) seg += `#${node.attrs.id}`;
+    // A duplicated or awkward id does not round-trip (`set` would edit the first
+    // match, or the selector would not parse), so those fall back to a position.
+    const id = node.attrs && node.attrs.id;
+    if (id && !dupes.has(id) && idIsAddressable(id)) seg += `#${id}`;
     else if (sameTag.length > 1) seg += `:nth-of-type(${sameTag.indexOf(node) + 1})`;
     parts.unshift(seg);
     node = parent;

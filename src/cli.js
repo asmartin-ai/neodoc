@@ -9,7 +9,7 @@ import { chmodSync, closeSync, existsSync, openSync, readdirSync, readFileSync, 
 import { basename, dirname, extname, join, resolve, sep } from 'node:path';
 import { format, normalizeDocument, normalizeFragment, emitBlock, serialize } from './format.js';
 import { parse } from './parse.js';
-import { INLINE, isEl, parentOf, pathOf, textOf } from './tree.js';
+import { INLINE, descendants, isEl, parentOf, pathOf, textOf } from './tree.js';
 import { lint } from './lint.js';
 import { THEME_CSS } from './theme.js';
 import { queryAll } from './select.js';
@@ -360,7 +360,9 @@ function cmdId(args) {
   if (!file || !selector || !id) return fail('id: usage: neodoc id FILE --for SELECTOR --as NAME');
   const doc = openDoc(file);
   const [hit] = bodyHits(doc, selector);
-  const taken = queryAll(doc.html, `[id="${id}"]`).length > 0;
+  // Walk the tree rather than build `[id="…"]`: an id may hold a quote, and the
+  // selector engine has no way to escape one inside an attribute value.
+  const taken = descendants(doc.html).some((n) => n.type === 'element' && n.attrs && n.attrs.id === String(id));
   if (taken) throw new Error(`id "${id}" is already used`);
   hit.node.attrs.id = String(id);
   saveDoc(doc);

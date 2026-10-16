@@ -135,3 +135,26 @@ test('a file that is not UTF-8 is refused, never silently repaired', () => {
     assert.deepEqual(readFileSync(file), original, `${argv[0]} must leave the bytes alone`);
   }
 });
+
+test('a reported path addresses one block, even with duplicate or awkward ids', () => {
+  const file = tmpFile('dupes.nd.html', '<!doctype html><html data-neodoc="1" lang="en"><head><meta charset="utf-8">'
+    + '<title>t</title><meta content="neodoc 1.0.0" name="generator"></head><body>'
+    + '<p id="z">one</p><p id="z">two</p><p id="a b">three</p><p>four</p></body></html>');
+  const { matches } = JSON.parse(cli(['get', file, 'body > p', '--json']).stdout);
+  assert.equal(matches.length, 4);
+  assert.equal(new Set(matches.map((m) => m.path)).size, 4, `paths must be distinct: ${matches.map((m) => m.path)}`);
+  for (const m of matches) {
+    const again = JSON.parse(cli(['get', file, m.path, '--json']).stdout);
+    assert.equal(again.matches.length, 1, `${m.path} matched ${again.matches.length}`);
+    assert.equal(again.matches[0].text, m.text, `${m.path} named the wrong block`);
+  }
+});
+
+test('an id containing a quote is usable, and still counts as taken', () => {
+  const file = tmpFile('quotes.nd.html', '<!doctype html><html data-neodoc="1" lang="en"><head><meta charset="utf-8">'
+    + '<title>t</title><meta content="neodoc 1.0.0" name="generator"></head><body><p>one</p><p>two</p></body></html>');
+  assert.equal(cli(['id', file, '--for', 'body > p', '--as', 'q"z']).status, 0);
+  assert.match(readFileSync(file, 'utf8'), /id="q&quot;z"/);
+  // The uniqueness probe interpolates the id into a selector: it must still find it.
+  assert.equal(cli(['id', file, '--for', 'body > p:nth-of-type(2)', '--as', 'q"z']).status, 2);
+});
