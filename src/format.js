@@ -20,6 +20,7 @@ export const INDENT = '  ';
 const WHITESPACE_RUN = /[ \t\n\r\f]+/g;
 const TRIM_START = /^[ \t\n\r\f]+/;
 const TRIM_END = /[ \t\n\r\f]+$/;
+const needsCollapsing = /[ \t\n\r\f]/;
 
 /** Strip the model whitespace a browser's `white-space: normal` would strip. */
 function trimModel(text) {
@@ -31,24 +32,24 @@ const DROP_ATTRS = new Set(['align', 'border', 'cellpadding', 'cellspacing', 'bg
 
 // ---------------------------------------------------------------- normalization
 
-function cleanAttrs(node, warnings) {
+function cleanAttrs(name, attrs, warnings) {
   const out = {};
-  for (const rawKey of Object.keys(node.attrs)) {
+  for (const rawKey of Object.keys(attrs)) {
     const key = rawKey.toLowerCase();
-    const value = node.attrs[rawKey];
-    if (key === 'align' && (node.name === 'td' || node.name === 'th')) {
+    const value = attrs[rawKey];
+    if (key === 'align' && (name === 'td' || name === 'th')) {
       out['data-align'] = value.toLowerCase();
       continue;
     }
-    if (!isAllowed(node.name, key, warnings)) continue;
+    if (!isAllowed(name, key, warnings)) continue;
     out[key] = value;
   }
-  if (node.name === 'img') {
+  if (name === 'img') {
     if (out.alt === undefined) out.alt = '';
     if (out.width && !/^\d+$/.test(out.width)) delete out.width;
     if (out.height && !/^\d+$/.test(out.height)) delete out.height;
   }
-  if (node.name === 'a' && out.target === '_blank' && !out.rel) out.rel = 'noopener';
+  if (name === 'a' && out.target === '_blank' && !out.rel) out.rel = 'noopener';
   return out;
 }
 
@@ -71,17 +72,22 @@ function normalizeElement(node, warnings) {
   const out = {
     type: 'element',
     name,
-    attrs: cleanAttrs({ ...node, name }, warnings),
+    attrs: cleanAttrs(name, node.attrs, warnings),
     children: normalizeChildren(node.children || [], name, warnings),
   };
   // merge <strong><strong>x</strong></strong>
   while (out.children.length === 1 && INLINE_MERGEABLE.has(name)) {
     const only = out.children[0];
-    if (only.type === 'element' && only.name === name && Object.keys(only.attrs).length === 0) {
+    if (only.type === 'element' && only.name === name && hasNoAttrs(only.attrs)) {
       out.children = only.children;
     } else break;
   }
   return out;
+}
+
+function hasNoAttrs(attrs) {
+  for (const _ in attrs) return false;
+  return true;
 }
 
 function normalizeChildren(children, parentName, warnings) {
@@ -95,7 +101,7 @@ function normalizeChildren(children, parentName, warnings) {
       if (child.mode === 'pre' && parentName === 'pre') {
         mapped.push({ type: 'text', text: normalizePre(child.text), mode: 'pre' });
       } else if (child.mode === 'raw') {
-        mapped.push({ type: 'text', text: stripTrailingBlank(child.text), mode: 'raw' });
+        mapped.push({ type: 'text', text: stripRawBlank(child.text), mode: 'raw' });
       } else {
         mapped.push({ type: 'text', text: child.text });
       }
@@ -106,38 +112,56 @@ function normalizeChildren(children, parentName, warnings) {
   return fixWhitespace(mapped);
 }
 
-function stripTrailingBlank(text) {
-  return text.replace(/\r\n?/g, '\n').replace(TRIM_END, '') + '\n';
+/**
+ * Raw text (style/script/textarea) is emitted one line per line at column 0, so
+ * the blank lines that adds around it are not content: trimming both ends is what
+ * makes a second pass a no-op. Without this the file grows a blank line per `fmt`.
+ */
+function stripRawBlank(text) {
+  return trimModel(text.replace(/\r\n?/g, '\n')) + '\n';
 }
 
-/** Whitespace model, docs/SPEC.md §4.4. */
+/** Whitespace model, docs/SPEC.md §4.4. Mutates its own children in place: every
+ *  node reaching this function was created by normalizeChildren, so no caller
+ *  holds a reference to the text it replaces. */
 function fixWhitespace(children) {
   const block = hasBlockChild(children);
   const kept = [];
   for (const child of children) {
     if (child.type !== 'text' || child.mode) { kept.push(child); continue; }
-    const collapsed = child.text.replace(WHITESPACE_RUN, ' ');
+    const text = child.text;
+    if (text !== '' && !needsCollapsing.test(text)) { kept.push(child); continue; }
+    const collapsed = text.replace(WHITESPACE_RUN, ' ');
     if (block) {
       const trimmed = trimModel(collapsed);
-      if (trimmed !== '') kept.push({ ...child, text: trimmed });
+      if (trimmed !== '') { child.text = trimmed; kept.push(child); }
       continue;
     }
+    if (collapsed === '') continue;
     if (collapsed === ' ') {
-      const beforeSomething = kept.length > 0;
-      kept.push({ ...child, text: ' ' });
-      if (!beforeSomething) kept.pop();
+      // Between two inline elements this is one space; at the edge of a block's
+      // content it is layout, and the loop below drops it again.
+      if (kept.length > 0) { child.text = ' '; kept.push(child); }
       continue;
     }
-    kept.push({ ...child, text: collapsed });
+    child.text = collapsed;
+    kept.push(child);
   }
-  if (!block && kept.length > 0) {
+  if (!block) {
     const first = kept[0];
-    if (first.type === 'text') kept[0] = { ...first, text: first.text.replace(/^ +/, '') };
-    const lastIdx = kept.length - 1;
-    const last = kept[lastIdx];
-    if (last.type === 'text') kept[lastIdx] = { ...last, text: last.text.replace(/ +$/, '') };
+    if (first && first.type === 'text' && !first.mode) first.text = first.text.replace(TRIM_START, '');
+    // Trailing whitespace at the end of a block's content is removed. The layout
+    // whitespace between `</body>` and `</html>` arrives as more than one node, so
+    // drop every whitespace-only node at the end, not just the last one.
+    while (kept.length > 0) {
+      const last = kept[kept.length - 1];
+      if (last.type !== 'text' || last.mode) break;
+      if (trimModel(last.text) === '') { kept.pop(); continue; }
+      last.text = last.text.replace(TRIM_END, '');
+      break;
+    }
   }
-  return kept.filter((c) => !(c.type === 'text' && c.text === ''));
+  return kept;
 }
 
 /** Strip the indentation the serializer added to pre continuation lines. */

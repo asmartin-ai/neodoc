@@ -53,10 +53,17 @@ export function decodeEntities(s) {
   });
 }
 
+// Most text carries nothing to escape. Probing once and returning the input is
+// several times cheaper than three scans that find nothing.
+const NEEDS_TEXT_ESCAPE = /[&<>]/;
+const NEEDS_ATTR_ESCAPE = /["&<]/;
+
 export function escapeText(s) {
+  if (!NEEDS_TEXT_ESCAPE.test(s)) return s;
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 export function escapeAttr(s) {
+  if (!NEEDS_ATTR_ESCAPE.test(s)) return s;
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
 }

@@ -89,7 +89,9 @@ test('forbidden and unknown constructs are kept (never destroyed) and linted', (
   assert.match(out, /<p>hi<\/p>/);
   const rules = lint(out).map((f) => f.rule);
   assert.ok(rules.includes('vocab'));
-  assert.ok(rules.includes('format'));
+  // The script body must not accumulate a blank line per pass (SPEC §4.7).
+  assert.equal(fmt(out), out);
+  assert.equal(lint(out).filter((f) => f.rule === 'format').length, 0);
 });
 
 test('lint reports a non-canonical file as fixable, and clean after fmt', () => {
