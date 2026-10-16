@@ -1,7 +1,7 @@
 // Lint: rule violations plus "not canonical" (fixable by `neodoc fmt`).
 // Runs the same parse/normalize path as `fmt` so the two can never disagree.
 
-import { format } from './format.js';
+import { formatTree } from './format.js';
 import { parse } from './parse.js';
 import { descendants, isEl, VOCAB, isAttrAllowed, RENAMES } from './tree.js';
 
@@ -85,7 +85,9 @@ export function lint(text) {
 
   // Canonicalization check: one finding at the first differing line.
   const inlineStyle = !!head && head.children.some((c) => c.name === 'style');
-  const { text: canonical } = format(text, { style: inlineStyle ? 'inline' : 'none' });
+  // Reuse the parse above: `formatTree` normalizes the same tree, so the two can
+  // still never disagree, and lint costs one parse instead of two.
+  const { text: canonical } = formatTree(root, { style: inlineStyle ? 'inline' : 'none' });
   if (canonical !== text) {
     const a = text.split('\n');
     const b = canonical.split('\n');

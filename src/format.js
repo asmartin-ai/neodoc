@@ -274,12 +274,20 @@ export function serialize(root) {
 
 // ---------------------------------------------------------------------- public
 
+/** Canonicalize a tree that is already parsed; mutates it. `lint` uses this to
+ *  reuse its own parse instead of parsing the document a second time. */
+export function formatTree(root, opts = {}) {
+  const warnings = [];
+  normalizeDocument(root, warnings, opts);
+  return { text: serialize(root), warnings };
+}
+
 /** Canonicalize a whole document. Returns `{ text, warnings }`. */
 export function format(html, opts = {}) {
   const { root, errors } = parse(html);
-  const warnings = errors.map((e) => `${e.message} (offset ${e.pos})`);
-  normalizeDocument(root, warnings, opts);
-  return { text: serialize(root), warnings };
+  const parseWarnings = errors.map((e) => `${e.message} (offset ${e.pos})`);
+  const { text, warnings } = formatTree(root, opts);
+  return { text, warnings: [...parseWarnings, ...warnings] };
 }
 
 /** Canonicalize a fragment (headless HTML) into normalized nodes at depth 0. */
