@@ -3,7 +3,7 @@
 
 import { formatTree } from './format.js';
 import { parse } from './parse.js';
-import { descendants, HEAD_MOVED, HEAD_ONLY, isAttrAllowed, isDroppedAttr, isEl, RENAMES, VOCAB } from './tree.js';
+import { ATTR_VALUES, descendants, HEAD_MOVED, HEAD_ONLY, isAttrAllowed, isDroppedAttr, isEl, RENAMES, VOCAB } from './tree.js';
 
 const REQUIRED_ATTRS = { img: ['src', 'alt'] };
 
@@ -74,6 +74,10 @@ export function lint(text) {
       if (key === 'data-thread') threads.add(value);
       if (key === 'data-at' && !/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?(Z|[+-]\d{2}:\d{2})?)?$/.test(value)) {
         add(line, 'timestamp', `data-at "${value}" is not ISO-8601`);
+      }
+      const allowed = ATTR_VALUES[key];
+      if (allowed && !allowed.has(value)) {
+        add(line, 'attr-value', `${key}="${value}" is not one of: ${[...allowed].join(', ')}`);
       }
       if (key === 'href' && value.startsWith('#')) anchors.add(value.slice(1));
     }

@@ -154,6 +154,16 @@ test('a title nested in a block is reported where it is, not called fixable', ()
   assert.deepEqual(lint(direct).filter((f) => f.rule === 'misplaced-head').map((f) => f.fixable), [true]);
 });
 
+test('an attribute value SPEC §3 fixes as an enum is checked', () => {
+  const doc = (body) => `<!doctype html><html data-neodoc="1" lang="en"><head><meta charset="utf-8"><title>t</title><meta content="neodoc 1.0.0" name="generator"></head><body>${body}</body></html>`;
+  const bad = lint(doc('<ul><li data-checked="yes">a</li></ul><table><thead><tr><th>h</th></tr></thead><tbody><tr><td data-align="middle">d</td></tr></tbody></table><aside data-thread="c1" data-state="maybe"><p data-author="a">x</p></aside>'));
+  const values = bad.filter((f) => f.rule === 'attr-value');
+  assert.equal(values.length, 3, values.map((f) => f.message).join(' | '));
+  assert.deepEqual(values.map((f) => f.fixable), [false, false, false], 'fmt does not rewrite a value');
+  const good = lint(doc('<ul><li data-checked="true">a</li></ul><p><mark data-c="c1">x</mark></p><aside data-thread="c1" data-state="open" data-note="warn"><p data-author="a">x</p></aside>'));
+  assert.deepEqual(good.filter((f) => f.rule === 'attr-value'), []);
+});
+
 test('a comment between two text runs stays inline', () => {
   // On its own line the renderer shows a space the file does not have.
   assert.deepEqual(bodyOf(fmt('<body><p>foo<!--x-->bar</p></body>')), ['    <p>foo<!--x-->bar</p>']);

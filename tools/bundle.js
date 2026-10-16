@@ -44,6 +44,9 @@ function transform(path, source) {
   const id = idOf(path);
   const exported = [];
   let body = source.replace(IMPORT, (_m, names, spec) => {
+    if (/\sas\s/.test(names)) {
+      throw new Error(`${id}: \`import { x as y }\` is not supported by this bundler — rename at the definition, or teach tools/bundle.js the alias`);
+    }
     const dep = idOf(resolve(dirname(path), spec));
     return `const {${names.replace(/\s+/g, ' ').trim()}} = __mods[${JSON.stringify(dep)}];`;
   });
@@ -52,7 +55,16 @@ function transform(path, source) {
     return _m.replace(/^export\s+/, '');
   });
   body = body.replace(EXPORT_LIST, (_m, list) => {
-    for (const name of list.split(',')) if (name.trim()) exported.push(name.trim().replace(/\s+as\s+.*/, ''));
+    for (const raw of list.split(',')) {
+      const name = raw.trim();
+      if (!name) continue;
+      // `export { a as b }` used to be recorded as `a`: the bundle would compile and
+      // then hand dependents the wrong name. Fail loudly instead.
+      if (/\sas\s/.test(name)) {
+        throw new Error(`${id}: \`export { x as y }\` is not supported by this bundler — export it under its own name, or teach tools/bundle.js the alias`);
+      }
+      exported.push(name);
+    }
     return '';
   });
   if (/^\s*(?:import|export)\s/m.test(body)) throw new Error(`${id}: unsupported module syntax (see the header of tools/bundle.js)`);

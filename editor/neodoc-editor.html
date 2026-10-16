@@ -180,6 +180,14 @@ const HEAD_ONLY = new Set(['title', 'meta', 'style', 'link', 'base']);
  *  quietly promoted them into the head. */
 const HEAD_MOVED = new Set(['title']);
 
+/** Attribute values SPEC §3 fixes as an enumeration. */
+const ATTR_VALUES = {
+  'data-align': new Set(['left', 'center', 'right']),
+  'data-checked': new Set(['true', 'false']),
+  'data-state': new Set(['open', 'resolved']),
+  'data-note': new Set(['info', 'warn', 'danger', 'tip']),
+};
+
 const ATTRS = {
   a: new Set(['href', 'target', 'rel']),
   img: new Set(['src', 'alt', 'width', 'height']),
@@ -298,7 +306,7 @@ function parentOf(root, target) {
   return null;
 }
 
-__mods["src/tree"] = {VOID, INLINE, HEADINGS, BLOCK, VOCAB, GLOBAL_ATTRS, HEAD_ONLY, HEAD_MOVED, ATTRS, isAttrAllowed, DROP_ATTRS, isDroppedAttr, RENAMES, hasBlockChild, isEmptyInline, el, txt, cmt, isEl, textOf, walk, descendants, pathOf, parentOf};
+__mods["src/tree"] = {VOID, INLINE, HEADINGS, BLOCK, VOCAB, GLOBAL_ATTRS, HEAD_ONLY, HEAD_MOVED, ATTR_VALUES, ATTRS, isAttrAllowed, DROP_ATTRS, isDroppedAttr, RENAMES, hasBlockChild, isEmptyInline, el, txt, cmt, isEl, textOf, walk, descendants, pathOf, parentOf};
 })();
 
 await (async function () {
@@ -5912,6 +5920,8 @@ function renderThreads() {
   $('#no-comments').hidden = threads.length > 0;
   for (const t of threads) {
     const li = h('li', { 'data-id': t.id });
+    // editor.css dims a resolved thread through this attribute.
+    if (t.state === 'resolved') li.setAttribute('data-resolved', '');
     li.append(h('b', {}, `${t.id} · ${t.author || 'unknown'}`));
     const bodyP = h('p');
     bodyP.textContent = t.text || '';

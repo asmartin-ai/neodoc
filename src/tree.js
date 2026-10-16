@@ -41,6 +41,14 @@ export const HEAD_ONLY = new Set(['title', 'meta', 'style', 'link', 'base']);
  *  quietly promoted them into the head. */
 export const HEAD_MOVED = new Set(['title']);
 
+/** Attribute values SPEC §3 fixes as an enumeration. */
+export const ATTR_VALUES = {
+  'data-align': new Set(['left', 'center', 'right']),
+  'data-checked': new Set(['true', 'false']),
+  'data-state': new Set(['open', 'resolved']),
+  'data-note': new Set(['info', 'warn', 'danger', 'tip']),
+};
+
 export const ATTRS = {
   a: new Set(['href', 'target', 'rel']),
   img: new Set(['src', 'alt', 'width', 'height']),

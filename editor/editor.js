@@ -1227,6 +1227,8 @@ function renderThreads() {
   $('#no-comments').hidden = threads.length > 0;
   for (const t of threads) {
     const li = h('li', { 'data-id': t.id });
+    // editor.css dims a resolved thread through this attribute.
+    if (t.state === 'resolved') li.setAttribute('data-resolved', '');
     li.append(h('b', {}, `${t.id} · ${t.author || 'unknown'}`));
     const bodyP = h('p');
     bodyP.textContent = t.text || '';
