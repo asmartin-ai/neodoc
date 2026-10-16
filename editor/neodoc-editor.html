@@ -2641,10 +2641,10 @@ function liveSelector(el) {
     const sibs = [...n.parentNode.children].filter((c) => c !== CHROME);
     const sameTag = sibs.filter((c) => c.nodeName === n.nodeName);
     let seg = n.nodeName.toLowerCase();
+    // Same rule as src/tree.js `pathOf`: a tag that occurs once among its element
+    // siblings needs no positional suffix, so the hint matches `neodoc get --json`.
     if (n.id) seg += `#${n.id}`;
-    else if (sibs.length > 1) {
-      seg += sameTag.length > 1 ? `:nth-of-type(${sameTag.indexOf(n) + 1})` : `:nth-child(${sibs.indexOf(n) + 1})`;
-    }
+    else if (sameTag.length > 1) seg += `:nth-of-type(${sameTag.indexOf(n) + 1})`;
     parts.unshift(seg);
   }
   const sel = ['body', ...parts].join(' > ');
