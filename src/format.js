@@ -203,22 +203,30 @@ export function normalizeDocument(root, warnings = [], opts = {}) {
   // head (where `normalizeHead` sorts them), not in the body where a `<meta>` would be
   // reported as misplaced and the editor would refuse the document.
   const headKids = [...(oldHead ? oldHead.children : []), ...displaced, ...spareHeads.flatMap((h) => h.children || [])];
+  // Head text is content: a browser's parser moves it into the body, so `fmt` does too.
+  const headText = headKids.filter((c) => c.type === 'text' && c.text.trim());
+  for (const c of headText) warnings.push('moved text out of <head>');
   // A vocabulary element in the head that the head does not allow (`<p>junk</p>` written
   // there) is content: a browser moves it into the body, and leaving it in the head
   // renders it above the document, because no stylesheet hides the head itself.
+  // The scaffolding is not content: a stray `<head>`/`<body>` inside a head is junk to
+  // keep where it is, and moving it produced a `<body>` element *inside* `<body>`.
   const isContent = (c) => c.type === 'element'
+    && !['html', 'head', 'body'].includes(RENAMES[c.name] || String(c.name).toLowerCase())
     && VOCAB.has(RENAMES[c.name] || String(c.name).toLowerCase())
     && !HEAD_ONLY.has(RENAMES[c.name] || String(c.name).toLowerCase());
   const headContent = headKids.filter(isContent);
   for (const c of headContent) warnings.push(`moved <${RENAMES[c.name] || c.name}> out of <head>`);
   const head = normalizeHead(
-    normalizeChildren(headKids.filter((c) => !headContent.includes(c)), 'head', warnings), warnings, opts,
+    normalizeChildren(headKids.filter((c) => !headContent.includes(c) && !headText.includes(c)), 'head', warnings), warnings, opts,
   );
   const body = {
     type: 'element',
     name: 'body',
     attrs: oldBody ? oldBody.attrs : {},
-    children: normalizeChildren([...remainder, ...headContent], 'body', warnings),
+    // Head content goes to the *front* of the body: a browser's parser reprocesses it in
+    // "after head" mode, so `<head><h1>A</h1></head><body><p>B</p>` reads A then B.
+    children: normalizeChildren([...headContent, ...headText, ...remainder], 'body', warnings),
   };
   if (html.attrs['data-neodoc'] !== '1') { html.attrs['data-neodoc'] = '1'; warnings.push('set data-neodoc="1"'); }
   if (!html.attrs.lang) { html.attrs.lang = 'en'; warnings.push('added lang="en"'); }
@@ -253,8 +261,12 @@ function normalizeHead(children, warnings, opts) {
     } else if (child.type === 'element') {
       warnings.push(`kept <${child.name}> in <head>, which is not part of the vocabulary`);
       extra.push(child);
+    } else if (child.type === 'text' && !child.text.trim()) {
+      // Layout whitespace between head children, dropped like any other (SPEC §4.4).
     } else {
-      warnings.push('dropped non-element content from <head>');
+      // A comment renders nothing and head text is routed into the body by
+      // `normalizeDocument`; both are content, so neither is deleted here.
+      extra.push(child);
     }
   }
   if (!title) { title = { type: 'element', name: 'title', attrs: {}, children: [] }; warnings.push('added missing <title>'); }

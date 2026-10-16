@@ -309,3 +309,12 @@ test('a nested <head> does not invert the head findings', () => {
   const fixed = lint(fmt(doc)).filter((f) => f.fixable).map((f) => f.rule);
   assert.deepEqual(fixed, []);
 });
+
+test('head content moves to the front of the body, and head comments are kept', () => {
+  const doc = (head, body) => `<!doctype html><html data-neodoc="1" lang="en"><head>${head}</head><body>${body}</body></html>`;
+  const moved = fmt(doc('<meta charset="utf-8"><title>T</title><h1>HEAD-H1</h1>', '<p>BODY-P</p>'));
+  assert.deepEqual(bodyOf(moved), ['    <h1>HEAD-H1</h1>', '    <p>BODY-P</p>'], 'a browser reads the head content first');
+  const kept = fmt(doc('<meta charset="utf-8"><title>T</title><!--KEEP-ME-->'));
+  assert.match(kept.split('</head>')[0], /<!--KEEP-ME-->/, 'a comment in the head is content');
+  assert.equal(fmt(kept), kept);
+});
