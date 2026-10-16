@@ -144,6 +144,16 @@ test('a block start tag closes an open paragraph, as a browser would', () => {
   ]);
 });
 
+test('a title nested in a block is reported where it is, not called fixable', () => {
+  const head = '<head><meta charset="utf-8"><title>T</title><meta content="neodoc 1.0.0" name="generator"></head>';
+  const nested = `<!doctype html><html data-neodoc="1" lang="en">${head}<body><section><title>Nested</title><p>x</p></section></body></html>`;
+  const findings = lint(nested).filter((f) => f.rule === 'misplaced-head');
+  assert.deepEqual(findings.map((f) => f.fixable), [false], 'fmt does not move a nested title');
+  // A title that is a direct child of the body *is* moved, so that one stays fixable.
+  const direct = `<!doctype html><html data-neodoc="1" lang="en">${head}<body><title>Real</title><p>x</p></body></html>`;
+  assert.deepEqual(lint(direct).filter((f) => f.rule === 'misplaced-head').map((f) => f.fixable), [true]);
+});
+
 test('unknown attributes are kept, behaviour and presentation are dropped', () => {
   // docs/SPEC.md §4.6: content we do not understand is still content, so an
   // unknown attribute survives `fmt` (and `lint` reports it, unfixable). An event

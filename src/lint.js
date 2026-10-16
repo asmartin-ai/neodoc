@@ -89,9 +89,12 @@ export function lint(text) {
   // moves them into the head rather than leaving them as body text (SPEC §3).
   const inHead = new Set(head ? [head, ...descendants(head)] : []);
   for (const [node, line] of headOnly) {
-    // Only a misplaced <title> is repaired by `fmt`; the rest are kept where they
-    // are and reported, so they must not be advertised as fixable.
-    if (!inHead.has(node)) add(line, 'misplaced-head', `<${node.name}> belongs in <head>`, HEAD_MOVED.has(node.name));
+    if (inHead.has(node)) continue;
+    // Only a `<title>` that is a *direct child of `<body>`* is relocated by `fmt`;
+    // the rest are kept where they are and reported, so they must not be advertised
+    // as fixable — a nested one included.
+    const moved = HEAD_MOVED.has(node.name) && !!body && (body.children || []).includes(node);
+    add(line, 'misplaced-head', `<${node.name}> belongs in <head>`, moved);
   }
 
   for (const id of anchors) if (!ids.has(id)) add(1, 'link-target', `href="#${id}" has no matching id`);
