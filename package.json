@@ -1,10 +1,27 @@
 {
   "name": "neodoc",
   "version": "1.0.0",
-  "private": true,
   "type": "module",
-  "description": "A single-file plaintext HTML document format — a .docx alternative.",
+  "description": "A single plaintext HTML file that replaces .docx: WYSIWYG markdown editing, images, comments, a CSS-selector CLI, and markdown/docx export.",
+  "keywords": [
+    "document",
+    "docx",
+    "html",
+    "markdown",
+    "wysiwyg",
+    "plaintext",
+    "comments",
+    "cli"
+  ],
   "license": "MIT",
+  "homepage": "https://github.com/asmartin-ai/neodoc#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/asmartin-ai/neodoc.git"
+  },
+  "bugs": {
+    "url": "https://github.com/asmartin-ai/neodoc/issues"
+  },
   "bin": {
     "neodoc": "bin/neodoc.js"
   },
@@ -12,12 +29,15 @@
     "bin",
     "src",
     "editor",
+    "tools",
     "docs"
   ],
   "scripts": {
     "test": "node --test test/",
+    "test:e2e": "playwright test",
     "lint": "oxlint",
-    "bench": "node bin/neodoc.js bench fixtures/big.nd.html"
+    "bundle": "node tools/bundle.js",
+    "bench": "node bin/neodoc.js bench fixtures/basic.nd.html --rounds 20"
   },
   "engines": {
     "node": ">=20"

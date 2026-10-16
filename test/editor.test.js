@@ -37,5 +37,8 @@ test('bundling does not expand $-patterns from module source', () => {
   const lines = readFileSync(join(ROOT, 'src/markdown.js'), 'utf8').split('\n').filter((l) => l.includes('$&'));
   assert.ok(lines.length > 0, 'expected a $-expansion hazard to exist in src/markdown.js');
   for (const line of lines) assert.ok(html.includes(line), `bundle lost this line: ${line.trim()}`);
-  assert.equal(html.split('<script').length - 1, 1, 'exactly one inline script tag may exist in the page');
+  // The corruption injected this exact tag; module source may legitimately mention
+  // `<script` while escaping it, so assert on the tag, not on a count of `<script`.
+  assert.ok(!html.includes('<script type="module" src="editor.js">'), 'the source tag was spliced into the bundle');
+  assert.ok(html.includes('</script>\n</body>'), 'the inline module is not the last thing in the page');
 });

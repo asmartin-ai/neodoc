@@ -42,6 +42,11 @@ export function lint(text) {
 
   for (const node of [root, ...descendants(root)]) {
     if (node.type === 'comment' && /--/.test(node.text)) add(at(node.pos ?? 0), 'comment', 'HTML comment contains "--"');
+    if (node.type === 'text' && /[\u200B\uFEFF]/.test(node.text)) {
+      // Never legitimate in prose, and invisible in a diff. The editor's own caret
+      // anchors are stripped before saving, so this means something else put them there.
+      add(at(node.pos ?? 0), 'invisible-char', 'invisible zero-width character (U+200B/U+FEFF)', true, 'warning');
+    }
     if (node.type !== 'element') continue;
     const line = at(node.pos ?? 0);
     const name = RENAMES[node.name] || node.name;

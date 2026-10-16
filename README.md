@@ -64,6 +64,9 @@ contract is [docs/SPEC.md](docs/SPEC.md). The short version:
 
 ## Layout of the format (the invariants that matter)
 
+- Name it `*.nd.html` (`report.nd.html`); `*.ndoc.html` and `*.ndoc` also work. The
+  last extension stays `.html` so browsers and static hosts serve it as HTML with no
+  MIME configuration — the identity is the `data-neodoc` marker, not the media type.
 - One **element per line**, 2-space indent, no blank lines, no hard wrapping.
 - A **closed vocabulary** and a closed attribute set (SPEC §3): no `class`, no
   `style=`, no `div`, no `span` — and `<script>` in a document is a lint error.

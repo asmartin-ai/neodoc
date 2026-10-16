@@ -46,3 +46,15 @@ No formatter, TypeScript, or Stylistic runtime dependency is required; readabili
 ## Local deviations
 
 None. No file under `tools/oxlint/anti-slop/` has been edited after installation, beyond adding this record and `LICENSE`.
+
+## Local deviations
+
+- `anti-slop/require-readable-spacing` is configured at **`warn`**, not `error`
+  (`.oxlintrc.json`). It demands a blank line before every statement, which would
+  add ~1,500 whitespace-only lines across this repo and conflicts with the
+  project's stated rule that files stay small and readable in one sitting for
+  agents. Every other vendored rule, and `oxc/no-accumulating-spread`, stays at
+  `error`. Run `npx oxlint --fix` to adopt the spacing style wholesale.
+- Rules whose findings are legitimate I/O-boundary checks are annotated inline at
+  the single boundary (`src/select.js:parseSelector`) rather than globally
+  disabled.

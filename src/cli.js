@@ -185,7 +185,11 @@ function cmdFmt(args) {
     for (const w of warnings) err(`${file}: ${w}`);
     if (args.flags.check) {
       if (text === raw) out(`${file}: ok`);
-      else { err(`${file}: not canonical`); bad++; }
+      else {
+        // The most common cross-platform surprise: a CRLF checkout. Say so.
+        err(`${file}: not canonical${raw.includes('\r\n') ? ' (CRLF line endings — the canonical form is LF)' : ''}`);
+        bad++;
+      }
       continue;
     }
     if (args.flags.w || args.flags.write) {

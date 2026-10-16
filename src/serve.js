@@ -50,7 +50,14 @@ async function handle(req, res, ctx) {
   try {
     if (url.pathname === '/doc') return await doc(req, res, ctx);
     if (url.pathname === '/save' && req.method === 'POST') return await save(req, res, ctx);
-    const rel = url.pathname === '/' ? '/editor/index.html' : url.pathname;
+    // `/` must land on the editor *page*, not on the editor's HTML served at the
+    // document root: the page's own relative URLs (`editor.css`, `editor.js`) then
+    // resolve under /editor/ and are found in the install dir.
+    if (url.pathname === '/') {
+      res.writeHead(302, { location: '/editor/index.html' });
+      return res.end();
+    }
+    const rel = url.pathname;
     // editor/ and src/ come from the neodoc install; everything else is relative
     // to the served document so a doc's own images and attachments work.
     const base = /^\/(editor|src)\//.test(rel) ? ctx.assets : dirname(ctx.file ?? join(ctx.root, 'x'));
