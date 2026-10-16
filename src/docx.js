@@ -55,6 +55,25 @@ const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replac
 
 const escA = (s) => esc(s).replace(/"/g, '&quot;');
 
+// A document is untrusted input: every value interpolated into the package is
+// either escaped or rejected, because Word refuses a package whose XML is
+// malformed, and a `data-at` is a legal place to smuggle a field instruction.
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:\d{2})?)?$/;
+const MIME_TYPE = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/i;
+
+/** The ISO-8601 timestamp to use, or `fallback` when the document's is not one. */
+function isoDate(value, fallback) {
+  return value !== undefined && ISO_DATE.test(String(value)) ? String(value) : fallback;
+}
+
+/** `dcterms:created` needs a full timestamp: a bare date gets midnight UTC. */
+function isoStamp(value, fallback) {
+  if (value === undefined) return fallback;
+  const text = String(value);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return `${text}T00:00:00Z`;
+  return ISO_DATE.test(text) && text.includes('T') ? text : fallback;
+}
+
 const collapse = (s) => String(s).replace(/[ \t\r\n\f\v]+/g, ' ');
 
 // ---------------------------------------------------------------- inline → runs
@@ -159,7 +178,7 @@ function inlineNode(n, ctx, st) {
     const inner = inlines(n.children || [], ctx, del ? { ...st, del: true } : st);
 
     return `<w:${name} w:id="${id}" w:author="${escA(n.attrs['data-author'] || ctx.opts.author || 'Unknown')}"` +
-      ` w:date="${n.attrs['data-at'] || FIXED_DATE}">${inner}</w:${name}>`;
+      ` w:date="${escA(isoDate(n.attrs['data-at'], FIXED_DATE))}">${inner}</w:${name}>`;
   }
 
   ctx.warn(`unsupported inline <${name}> written as plain text`);
@@ -719,12 +738,12 @@ function settingsXml() {
 }
 
 function coreXml(opts) {
-  const iso = opts.date ? `${opts.date}T00:00:00Z` : FIXED_DATE;
+  const iso = isoStamp(opts.date, FIXED_DATE);
 
   return XML_DECL + `<cp:coreProperties xmlns:cp="${CP}" xmlns:dc="${DC}" xmlns:dcterms="${DCTERMS}" xmlns:xsi="${XSI}">`
     + (opts.title ? `<dc:title>${esc(opts.title)}</dc:title>` : '')
     + (opts.author ? `<dc:creator>${esc(opts.author)}</dc:creator>` : '')
-    + `<dcterms:created xsi:type="dcterms:W3CDTF">${iso}</dcterms:created>`
+    + `<dcterms:created xsi:type="dcterms:W3CDTF">${esc(iso)}</dcterms:created>`
     + (opts.author ? `<cp:lastModifiedBy>${esc(opts.author)}</cp:lastModifiedBy>` : '')
     + '</cp:coreProperties>';
 }
@@ -739,7 +758,7 @@ function contentTypesXml(exts, hasComments) {
   return XML_DECL + `<Types xmlns="${CT}">`
     + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
     + '<Default Extension="xml" ContentType="application/xml"/>'
-    + [...exts].map(([e, mime]) => `<Default Extension="${e}" ContentType="${mime}"/>`).join('')
+    + [...exts].map(([e, mime]) => `<Default Extension="${escA(e)}" ContentType="${escA(MIME_TYPE.test(mime) ? mime : 'application/octet-stream')}"/>`).join('')
     + override('/word/document.xml', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml')
     + override('/word/styles.xml', 'application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml')
     + override('/word/numbering.xml', 'application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml')
