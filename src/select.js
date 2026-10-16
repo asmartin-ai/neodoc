@@ -11,7 +11,7 @@
 // queries visible in `neodoc bench`. No `an+b`, `:nth-last-child`, `:has` —
 // the vocabulary does not need them.
 
-import { descendants, isEl, pathOf, walk } from './tree.js';
+import { descendants, isEl, pathOf } from './tree.js';
 
 const WS = /\s/;
 const IDENT_CH = /[A-Za-z0-9_-]/;
@@ -190,18 +190,54 @@ export function parseSelector(text) {
 
 // ------------------------------------------------------------------ matching
 
-function parentMap(root) {
-  const map = new Map();
-  walk(root, (node) => {
-    for (const child of node.children || []) map.set(child, node);
-  });
-  return map;
+/**
+ * Parent lookup for the whole tree (one map insert per node) plus a per-parent
+ * cache of child positions, built the first time a selector asks about that
+ * parent. Matching therefore stays linear: the old engine re-scanned a parent's
+ * children — and ran `indexOf` — for every node, so `p:nth-child(1)` over 20,000
+ * sibling paragraphs took 9.3s and `td:nth-of-type(3)` over 20,000 cells took 3.1s.
+ */
+function buildIndex(root) {
+  const parent = new Map();
+  const stack = [root];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    for (const child of node.children || []) {
+      parent.set(child, node);
+      stack.push(child);
+    }
+  }
+  return { parent, siblings: new Map() };
 }
 
-const elementChildren = (parent) =>
-  (parent && parent.children ? parent.children.filter((c) => isEl(c)) : []);
+const NO_SIBLINGS = { index: new Map(), elem: new Map(), count: -1, type: new Map() };
 
-function matchCompound(node, compound, parents) {
+/** Child positions within `parent`, computed once per parent on demand. */
+function siblingsOf(idx, parent) {
+  if (!parent) return NO_SIBLINGS;
+  const cached = idx.siblings.get(parent);
+  if (cached) return cached;
+  const index = new Map();
+  const elem = new Map();
+  const type = new Map();
+  const seen = new Map();
+  const kids = parent.children || [];
+  let elements = 0;
+  for (let i = 0; i < kids.length; i++) {
+    const child = kids[i];
+    index.set(child, i);
+    if (!isEl(child)) continue;
+    elem.set(child, elements++);
+    const before = seen.get(child.name) ?? 0;
+    type.set(child, before);
+    seen.set(child.name, before + 1);
+  }
+  const entry = { index, elem, count: elements, type };
+  idx.siblings.set(parent, entry);
+  return entry;
+}
+
+function matchCompound(node, compound, idx) {
   if (compound.tag && compound.tag !== '*' && node.name !== compound.tag) return false;
   const attrs = node.attrs || {};
   if (compound.id !== null && attrs.id !== compound.id) return false;
@@ -214,35 +250,34 @@ function matchCompound(node, compound, parents) {
     else if (attr.op === '*=' && !value.includes(attr.value)) return false;
   }
   if (!compound.pseudos.length) return true;
-  const siblings = elementChildren(parents.get(node));
+  const sib = siblingsOf(idx, idx.parent.get(node));
   for (const pseudo of compound.pseudos) {
     if (pseudo.name === 'not') {
-      if (matchCompound(node, pseudo.arg, parents)) return false;
+      if (matchCompound(node, pseudo.arg, idx)) return false;
     } else if (pseudo.name === 'first-child') {
-      if (siblings[0] !== node) return false;
+      if (sib.elem.get(node) !== 0) return false;
     } else if (pseudo.name === 'last-child') {
-      if (siblings[siblings.length - 1] !== node) return false;
+      if (sib.elem.get(node) !== sib.count - 1) return false;
     } else if (pseudo.name === 'nth-child') {
-      if (siblings[pseudo.arg - 1] !== node) return false;
+      if (sib.elem.get(node) !== pseudo.arg - 1) return false;
     } else if (pseudo.name === 'nth-of-type') {
-      const sameTag = siblings.filter((c) => c.name === node.name);
-      if (sameTag[pseudo.arg - 1] !== node) return false;
+      if (sib.type.get(node) !== pseudo.arg - 1) return false;
     }
   }
   return true;
 }
 
 /** Right-to-left: the rightmost compound must match `node`, then walk leftwards up. */
-function matchesComplex(node, parents, parts, k) {
-  if (!matchCompound(node, parts[k].compound, parents)) return false;
+function matchesComplex(node, idx, parts, k) {
+  if (!matchCompound(node, parts[k].compound, idx)) return false;
   if (k === 0) return true;
-  let parent = parents.get(node);
+  let parent = idx.parent.get(node);
   if (parts[k].combinator === 'child') {
-    return !!parent && isEl(parent) && matchesComplex(parent, parents, parts, k - 1);
+    return !!parent && isEl(parent) && matchesComplex(parent, idx, parts, k - 1);
   }
   while (parent && isEl(parent)) {
-    if (matchesComplex(parent, parents, parts, k - 1)) return true;
-    parent = parents.get(parent);
+    if (matchesComplex(parent, idx, parts, k - 1)) return true;
+    parent = idx.parent.get(parent);
   }
   return false;
 }
@@ -255,9 +290,9 @@ const isBareBody = (sel) =>
     return c.tag === 'body' && c.id === null && !c.attrs.length && !c.pseudos.length;
   })();
 
-function hit(node, parents) {
-  const parent = parents.get(node) || null;
-  return { node, parent, index: parent ? parent.children.indexOf(node) : -1 };
+function hit(node, idx) {
+  const parent = idx.parent.get(node) ?? null;
+  return { node, parent, index: parent ? siblingsOf(idx, parent).index.get(node) ?? -1 : -1 };
 }
 
 /**
@@ -267,19 +302,19 @@ function hit(node, parents) {
 export function queryAll(root, selectorText) {
   const sel = selectorText && selectorText.groups ? selectorText : parseSelector(selectorText);
   if (!sel || !sel.groups) throw new Error('selector must be a string or parseSelector() result');
-  const parents = parentMap(root);
+  const idx = buildIndex(root);
   const out = [];
   if (isBareBody(sel)) {
     let body = isEl(root, 'body') ? root : null;
     if (!body) for (const node of descendants(root)) if (isEl(node, 'body')) { body = node; break; }
-    if (body) out.push(hit(body, parents));
+    if (body) out.push(hit(body, idx));
     return out;
   }
   for (const node of descendants(root)) {
     if (!isEl(node)) continue;
     for (const parts of sel.groups) {
-      if (matchesComplex(node, parents, parts, parts.length - 1)) {
-        out.push(hit(node, parents));
+      if (matchesComplex(node, idx, parts, parts.length - 1)) {
+        out.push(hit(node, idx));
         break;
       }
     }
