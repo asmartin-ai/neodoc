@@ -99,3 +99,21 @@ test('`note add --on ""` is refused instead of annotating the whole block', () =
   assert.equal(res.status, 2, 'an empty quote selector is a usage error');
   assert.equal(readFileSync(file, 'utf8'), before);
 });
+
+test('a value that looks like a flag is kept; a known flag still means "no value"', () => {
+  const file = tmpFile('doc.nd.html', DOC);
+  const res = cli(['add', file, '--after', 'body > p', '--md', '-- x']);
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(readFileSync(file, 'utf8'), /<p>-- x<\/p>/, 'the value reached the command');
+  const other = tmpFile('doc2.nd.html', DOC);
+  const frag = tmpFile('frag.md', '# From a file\n');
+  assert.equal(cli(['add', other, '--after', 'body > p', '--file', frag, '--md']).status, 0);
+  assert.match(readFileSync(other, 'utf8'), /<h1>From a file<\/h1>/, 'bare --md still reads the file');
+});
+
+test('a value spelled like a flag name is still a value', () => {
+  const file = tmpFile('doc.nd.html', DOC);
+  const target = tmpFile('md', 'written\n');
+  assert.equal(cli(['add', file, '--after', 'body > p', '--file', target]).status, 0);
+  assert.match(readFileSync(file, 'utf8'), /written/, 'a file named `md` is read, not mistaken for --md');
+});

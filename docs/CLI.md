@@ -60,7 +60,9 @@ neodoc id report.nd.html --for 'body > section:nth-child(2)' --as intro
 `path` is a valid selector for the same node, so `get --json` → edit → `get`
 round-trips. `set`/`insert` replace or insert at the **first** match; `rm` removes
 all matches. Content flags: `--md S`, `--html S`, `--file F` (HTML from a file),
-`--file - --md` (markdown from stdin), `--stdin` (HTML from stdin).
+`--file - --md` (markdown from stdin), `--stdin` (HTML from stdin). A value may
+start with `-` (`--md '-- not a flag'`); use `=` before a value that is itself a
+known flag name.
 
 ## Comments and tracked changes
 

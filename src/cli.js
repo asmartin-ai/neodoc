@@ -43,6 +43,17 @@ export async function main(argv) {
 
 const BOOLEAN_FLAGS = new Set(['check', 'write', 'w', 'json', 'text', 'stdin', 'fix', 'open', 'done', 'quiet', 'help']);
 
+// Flags that take a value. Listing them keeps a value that looks like a flag intact
+// (`--md '-- x'`), while a following *known* flag still means "no value"
+// (`--file x --md` is markdown from that file). Keep in sync with USAGE below.
+const VALUE_FLAGS = new Set(['after', 'as', 'at', 'before', 'by', 'comments', 'file', 'for', 'html', 'into', 'md', 'o', 'on', 'port', 'rounds', 'say', 'style', 'title']);
+
+/** A flag we recognize — `-x`, `--x` or `--x=y` — as opposed to a file called `-w`. */
+function isKnownFlag(token) {
+  if (!token.startsWith('-')) return false;
+  return BOOLEAN_FLAGS.has(token.replace(/^--?/, '').split('=')[0]) || VALUE_FLAGS.has(token.replace(/^--?/, '').split('=')[0]);
+}
+
 function parseArgs(argv) {
   const positional = [];
   const flags = {};
@@ -55,13 +66,13 @@ function parseArgs(argv) {
       if (eq !== -1) { flags[key] = token.slice(eq + 1); continue; }
       const next = argv[i + 1];
       // A value-taking flag may also be used as a bare modifier (`--file x --md`).
-      if (!BOOLEAN_FLAGS.has(key) && next !== undefined && !next.startsWith('--')) { flags[key] = next; i++; } else flags[key] = true;
+      if (!BOOLEAN_FLAGS.has(key) && next !== undefined && !isKnownFlag(next)) { flags[key] = next; i++; } else flags[key] = true;
       continue;
     }
     if (token.startsWith('-') && token.length === 2) {
       const key = token.slice(1);
       const next = argv[i + 1];
-      if (!BOOLEAN_FLAGS.has(key) && next !== undefined && !next.startsWith('--')) { flags[key] = next; i++; } else flags[key] = true;
+      if (!BOOLEAN_FLAGS.has(key) && next !== undefined && !isKnownFlag(next)) { flags[key] = next; i++; } else flags[key] = true;
       continue;
     }
     positional.push(token);
