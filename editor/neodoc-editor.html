@@ -188,10 +188,26 @@ const ATTRS = {
   html: new Set(['data-neodoc']),
 };
 
+/** Is `name` part of the vocabulary for `elName`? This is the closed set the
+ *  editor keeps from *paste*; `fmt` keeps unknown attributes too (see below). */
 function isAttrAllowed(elName, name) {
   if (GLOBAL_ATTRS.has(name) || name.startsWith('data-')) return true;
   const set = ATTRS[elName];
   return !!set && set.has(name);
+}
+
+/** Attributes no document keeps: the presentational set (`class` soup is what makes
+ *  Word HTML unmaintainable) and event handlers, which are code, not content. */
+const DROP_ATTRS = new Set(['align', 'border', 'cellpadding', 'cellspacing', 'bgcolor',
+  'color', 'face', 'valign', 'style', 'class', 'role']);
+
+// `onclick`, `onerror`, ... but not a name that merely starts with "on" (`only`).
+const EVENT_ATTR = /^on[a-z]{3,}$/;
+
+/** Everything else survives `fmt`, known or not: content we do not understand is
+ *  still content (docs/SPEC.md §4.6), and `lint` reports what is unknown. */
+function isDroppedAttr(name) {
+  return DROP_ATTRS.has(name) || EVENT_ATTR.test(name);
 }
 
 const RENAMES = { b: 'strong', i: 'em', strike: 's' };
@@ -289,7 +305,7 @@ function parentOf(root, target) {
   return null;
 }
 
-__mods["src/tree"] = {VOID, RAW, INLINE, HEADINGS, BLOCK, VOCAB, GLOBAL_ATTRS, ATTRS, isAttrAllowed, RENAMES, hasBlockChild, isEmptyInline, el, txt, cmt, isEl, isText, isComment, textOf, walk, descendants, childrenOf, findById, clone, pathOf, parentOf};
+__mods["src/tree"] = {VOID, RAW, INLINE, HEADINGS, BLOCK, VOCAB, GLOBAL_ATTRS, ATTRS, isAttrAllowed, DROP_ATTRS, isDroppedAttr, RENAMES, hasBlockChild, isEmptyInline, el, txt, cmt, isEl, isText, isComment, textOf, walk, descendants, childrenOf, findById, clone, pathOf, parentOf};
 })();
 
 await (async function () {
@@ -2556,6 +2572,7 @@ function readTag(src, i) {
   j += nameMatch ? nameMatch[0].length : 0;
   const attrs = {};
   let selfClosing = false;
+  let stray = false;
   const n = src.length;
   while (j < n) {
     const ws = scan(SPACE_RE, src, j);
@@ -2564,7 +2581,22 @@ function readTag(src, i) {
     if (src[j] === '>') { j++; break; }
     if (src.startsWith('/>', j)) { selfClosing = true; j += 2; break; }
     const anMatch = scan(ATTRNAME_RE, src, j);
-    if (!anMatch) { j++; continue; }
+    if (!anMatch) {
+      // A stray `=` where a name belongs (what a bad converter emits). HTML calls
+      // it unexpected-equals-sign and folds it into the name; we skip it. Two real
+      // shapes follow it: `class="x"=id="y"`, where `id` is a genuine attribute and
+      // must survive, and `charset="utf-8"=undefined>`, where the valueless token is
+      // junk and is dropped.
+      stray = true;
+      j++;
+      const run = scan(ATTRNAME_RE, src, j);
+      if (run) {
+        const after = j + run[0].length;
+        const wsAt = scan(SPACE_RE, src, after);
+        if (src[wsAt ? after + wsAt[0].length : after] !== '=') j = after;
+      }
+      continue;
+    }
     const an = anMatch[0];
     j += an.length;
     const ws2 = scan(SPACE_RE, src, j);
@@ -2587,7 +2619,7 @@ function readTag(src, i) {
     }
     attrs[an.toLowerCase()] = decodeEntities(av);
   }
-  return { name, attrs, selfClosing, end: j };
+  return { name, attrs, selfClosing, stray, end: j };
 }
 
 function findCloseTag(src, lower, name, from) {
@@ -2673,6 +2705,7 @@ function parse(src) {
 
     const t = readTag(src, i);
     if (!t.name) { err('malformed tag', i); pushText('<', i); i++; continue; }
+    if (t.stray) err('malformed attribute dropped', i);
     closeImplied(t.name);
     const node = { type: 'element', name: t.name, attrs: t.attrs, children: [], pos: i };
     parent().children.push(node);
@@ -2787,7 +2820,7 @@ await (async function () {
 const {parse} = __mods["src/parse"];
 const {THEME_CSS} = __mods["src/theme"];
 const {GENERATOR} = __mods["src/version"];
-const {ATTRS, GLOBAL_ATTRS, RENAMES, VOID, hasBlockChild, isEmptyInline} = __mods["src/tree"];
+const {RENAMES, VOID, hasBlockChild, isDroppedAttr, isEmptyInline} = __mods["src/tree"];
 const {escapeText, escapeAttr} = __mods["src/entities"];
 const INDENT = '  ';
 
@@ -2804,9 +2837,6 @@ function trimModel(text) {
   return text.replace(TRIM_START, '').replace(TRIM_END, '');
 }
 
-const DROP_ATTRS = new Set(['align', 'border', 'cellpadding', 'cellspacing', 'bgcolor',
-  'color', 'face', 'valign', 'style', 'class', 'onclick', 'onload', 'role']);
-
 // ---------------------------------------------------------------- normalization
 
 function cleanAttrs(name, attrs, warnings) {
@@ -2818,8 +2848,11 @@ function cleanAttrs(name, attrs, warnings) {
       out['data-align'] = value.toLowerCase();
       continue;
     }
-    if (!isAllowed(name, key, warnings)) continue;
-    out[key] = value;
+    if (isDroppedAttr(key)) {
+      warnings.push(`${name}: dropped attribute "${key}" (presentational or event handler)`);
+      continue;
+    }
+    out[key] = value; // unknown attributes are kept: lint reports them
   }
   if (name === 'img') {
     if (out.alt === undefined) out.alt = '';
@@ -2828,18 +2861,6 @@ function cleanAttrs(name, attrs, warnings) {
   }
   if (name === 'a' && out.target === '_blank' && !out.rel) out.rel = 'noopener';
   return out;
-}
-
-function isAllowed(name, key, warnings) {
-  if (DROP_ATTRS.has(key)) {
-    warnings.push(`${name}: dropped attribute "${key}" (presentational)`);
-    return false;
-  }
-  if (GLOBAL_ATTRS.has(key) || key.startsWith('data-')) return true;
-  const set = ATTRS[name];
-  if (set && set.has(key)) return true;
-  warnings.push(`${name}: dropped unknown attribute "${key}"`);
-  return false;
 }
 
 const INLINE_MERGEABLE = new Set(['strong', 'em', 's', 'u', 'del', 'ins', 'mark', 'code', 'sub', 'sup']);

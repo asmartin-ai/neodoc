@@ -9,7 +9,7 @@
 import { parse } from './parse.js';
 import { THEME_CSS } from './theme.js';
 import { GENERATOR } from './version.js';
-import { ATTRS, GLOBAL_ATTRS, RENAMES, VOID, hasBlockChild, isEmptyInline } from './tree.js';
+import { RENAMES, VOID, hasBlockChild, isDroppedAttr, isEmptyInline } from './tree.js';
 import { escapeText, escapeAttr } from './entities.js';
 
 export const INDENT = '  ';
@@ -27,9 +27,6 @@ function trimModel(text) {
   return text.replace(TRIM_START, '').replace(TRIM_END, '');
 }
 
-const DROP_ATTRS = new Set(['align', 'border', 'cellpadding', 'cellspacing', 'bgcolor',
-  'color', 'face', 'valign', 'style', 'class', 'onclick', 'onload', 'role']);
-
 // ---------------------------------------------------------------- normalization
 
 function cleanAttrs(name, attrs, warnings) {
@@ -41,8 +38,11 @@ function cleanAttrs(name, attrs, warnings) {
       out['data-align'] = value.toLowerCase();
       continue;
     }
-    if (!isAllowed(name, key, warnings)) continue;
-    out[key] = value;
+    if (isDroppedAttr(key)) {
+      warnings.push(`${name}: dropped attribute "${key}" (presentational or event handler)`);
+      continue;
+    }
+    out[key] = value; // unknown attributes are kept: lint reports them
   }
   if (name === 'img') {
     if (out.alt === undefined) out.alt = '';
@@ -51,18 +51,6 @@ function cleanAttrs(name, attrs, warnings) {
   }
   if (name === 'a' && out.target === '_blank' && !out.rel) out.rel = 'noopener';
   return out;
-}
-
-function isAllowed(name, key, warnings) {
-  if (DROP_ATTRS.has(key)) {
-    warnings.push(`${name}: dropped attribute "${key}" (presentational)`);
-    return false;
-  }
-  if (GLOBAL_ATTRS.has(key) || key.startsWith('data-')) return true;
-  const set = ATTRS[name];
-  if (set && set.has(key)) return true;
-  warnings.push(`${name}: dropped unknown attribute "${key}"`);
-  return false;
 }
 
 const INLINE_MERGEABLE = new Set(['strong', 'em', 's', 'u', 'del', 'ins', 'mark', 'code', 'sub', 'sup']);

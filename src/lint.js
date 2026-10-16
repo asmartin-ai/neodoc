@@ -3,7 +3,7 @@
 
 import { formatTree } from './format.js';
 import { parse } from './parse.js';
-import { descendants, isEl, VOCAB, isAttrAllowed, RENAMES } from './tree.js';
+import { descendants, isAttrAllowed, isDroppedAttr, isEl, RENAMES, VOCAB } from './tree.js';
 
 const REQUIRED_ATTRS = { img: ['src', 'alt'] };
 
@@ -58,7 +58,11 @@ export function lint(text) {
       continue;
     }
     for (const [key, value] of Object.entries(node.attrs)) {
-      if (!isAttrAllowed(name, key)) add(line, 'attr', `unknown attribute "${key}" on <${name}>`, true);
+      if (isDroppedAttr(key)) {
+        add(line, 'attr', `attribute "${key}" on <${name}> is presentational or an event handler`, true);
+      } else if (!isAttrAllowed(name, key)) {
+        add(line, 'attr', `unknown attribute "${key}" on <${name}> (kept as written)`, false);
+      }
       if (key === 'id') {
         if (ids.has(value)) add(line, 'id-duplicate', `duplicate id "${value}" (first at line ${ids.get(value)})`);
         else ids.set(value, line);

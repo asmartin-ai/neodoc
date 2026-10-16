@@ -49,10 +49,26 @@ export const ATTRS = {
   html: new Set(['data-neodoc']),
 };
 
+/** Is `name` part of the vocabulary for `elName`? This is the closed set the
+ *  editor keeps from *paste*; `fmt` keeps unknown attributes too (see below). */
 export function isAttrAllowed(elName, name) {
   if (GLOBAL_ATTRS.has(name) || name.startsWith('data-')) return true;
   const set = ATTRS[elName];
   return !!set && set.has(name);
+}
+
+/** Attributes no document keeps: the presentational set (`class` soup is what makes
+ *  Word HTML unmaintainable) and event handlers, which are code, not content. */
+export const DROP_ATTRS = new Set(['align', 'border', 'cellpadding', 'cellspacing', 'bgcolor',
+  'color', 'face', 'valign', 'style', 'class', 'role']);
+
+// `onclick`, `onerror`, ... but not a name that merely starts with "on" (`only`).
+const EVENT_ATTR = /^on[a-z]{3,}$/;
+
+/** Everything else survives `fmt`, known or not: content we do not understand is
+ *  still content (docs/SPEC.md §4.6), and `lint` reports what is unknown. */
+export function isDroppedAttr(name) {
+  return DROP_ATTRS.has(name) || EVENT_ATTR.test(name);
 }
 
 export const RENAMES = { b: 'strong', i: 'em', strike: 's' };

@@ -152,7 +152,9 @@ blocks. No block inside an inline context.
 6. **`fmt` normalizes but does not restructure**: element names are lowercased,
    `<b>`→`<strong>`, `<i>`→`<em>`, `<strike>`→`<s>`, `align` on `td`/`th`
    → `data-align`, presentational attributes (`border`, `cellpadding`, `bgcolor`,
-   `color`, `face`, `valign`, `style`, `class`) are dropped with a warning,
+   `color`, `face`, `valign`, `style`, `class`, `role`) and event handlers
+   (`on*` — code, not content) are dropped with a warning, a stray `=` between
+   attributes is skipped,
    nested identical inline elements (`<em><em>x</em></em>`) are merged, and empty
    inline elements are removed. Unknown elements and unknown attributes are
    **kept** (never deleted) and reported by `lint`; `script` content is passed

@@ -42,6 +42,7 @@ function readTag(src, i) {
   j += nameMatch ? nameMatch[0].length : 0;
   const attrs = {};
   let selfClosing = false;
+  let stray = false;
   const n = src.length;
   while (j < n) {
     const ws = scan(SPACE_RE, src, j);
@@ -50,7 +51,22 @@ function readTag(src, i) {
     if (src[j] === '>') { j++; break; }
     if (src.startsWith('/>', j)) { selfClosing = true; j += 2; break; }
     const anMatch = scan(ATTRNAME_RE, src, j);
-    if (!anMatch) { j++; continue; }
+    if (!anMatch) {
+      // A stray `=` where a name belongs (what a bad converter emits). HTML calls
+      // it unexpected-equals-sign and folds it into the name; we skip it. Two real
+      // shapes follow it: `class="x"=id="y"`, where `id` is a genuine attribute and
+      // must survive, and `charset="utf-8"=undefined>`, where the valueless token is
+      // junk and is dropped.
+      stray = true;
+      j++;
+      const run = scan(ATTRNAME_RE, src, j);
+      if (run) {
+        const after = j + run[0].length;
+        const wsAt = scan(SPACE_RE, src, after);
+        if (src[wsAt ? after + wsAt[0].length : after] !== '=') j = after;
+      }
+      continue;
+    }
     const an = anMatch[0];
     j += an.length;
     const ws2 = scan(SPACE_RE, src, j);
@@ -73,7 +89,7 @@ function readTag(src, i) {
     }
     attrs[an.toLowerCase()] = decodeEntities(av);
   }
-  return { name, attrs, selfClosing, end: j };
+  return { name, attrs, selfClosing, stray, end: j };
 }
 
 function findCloseTag(src, lower, name, from) {
@@ -159,6 +175,7 @@ export function parse(src) {
 
     const t = readTag(src, i);
     if (!t.name) { err('malformed tag', i); pushText('<', i); i++; continue; }
+    if (t.stray) err('malformed attribute dropped', i);
     closeImplied(t.name);
     const node = { type: 'element', name: t.name, attrs: t.attrs, children: [], pos: i };
     parent().children.push(node);

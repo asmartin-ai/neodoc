@@ -94,6 +94,31 @@ test('forbidden and unknown constructs are kept (never destroyed) and linted', (
   assert.equal(lint(out).filter((f) => f.rule === 'format').length, 0);
 });
 
+test('unknown attributes are kept, behaviour and presentation are dropped', () => {
+  // docs/SPEC.md §4.6: content we do not understand is still content, so an
+  // unknown attribute survives `fmt` (and `lint` reports it, unfixable). An event
+  // handler is code and a presentational attribute is what makes Word HTML
+  // unmaintainable, so both are dropped with a warning.
+  assert.deepEqual(bodyOf(fmt('<body><p foo="bar" data-x="1">x</p></body>')), ['    <p data-x="1" foo="bar">x</p>']);
+  assert.deepEqual(bodyOf(fmt('<body><p onclick="x()" onmouseover="y()">hi</p></body>')), ['    <p>hi</p>']);
+  assert.deepEqual(bodyOf(fmt('<body><p style="color:red" class="c">hi</p></body>')), ['    <p>hi</p>']);
+  const doc = fmt('<!doctype html><html><head><title>t</title></head><body><p foo="bar">x</p></body></html>');
+  assert.deepEqual(lint(doc).map((f) => `${f.rule}:${f.fixable}`), ['attr:false'],
+    'a kept attribute must not be reported as fixable (invariant 4)');
+  // A dropped one is fixed by fmt, so that finding *is* fixable — and one fmt pass
+  // leaves nothing to report.
+  const raw = '<!doctype html><html data-neodoc="1" lang="en"><head><meta charset="utf-8"><title>t</title>'
+    + '</head><body><p onclick="x()">x</p></body></html>';
+  assert.deepEqual(lint(raw).filter((f) => f.rule === 'attr').map((f) => f.fixable), [true]);
+  assert.deepEqual(lint(fmt(raw)), []);
+});
+
+test('a stray equals sign is skipped, not turned into an attribute', () => {
+  // Both shapes come from real converters; only one of them names an attribute.
+  assert.deepEqual(bodyOf(fmt('<body><p id="a"=data-x="1">x</p></body>')), ['    <p data-x="1" id="a">x</p>']);
+  assert.deepEqual(bodyOf(fmt('<body><p id="a"=junk>x</p></body>')), ['    <p id="a">x</p>']);
+});
+
 test('lint reports a non-canonical file as fixable, and clean after fmt', () => {
   assert.equal(lint(fmt('<body><p>hi</p></body>')).length, 0);
   const findings = lint('<p>hi</p>');
