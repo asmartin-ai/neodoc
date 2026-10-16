@@ -98,3 +98,66 @@ test('undo back to the saved state is not "unsaved"', async ({ page }) => {
   await expect(page.locator('#st-dirty')).toHaveText('saved');
   expectClean(noise);
 });
+
+test('a quoted attribute on <html> survives an undo', async ({ page }) => {
+  const dir = await tmpDir();
+  const file = join(dir, 'attrs.nd.html');
+  writeFileSync(file, `<!doctype html>
+<html data-neodoc="1" lang="en" data-x="a&quot;b" title="a&quot;b">
+  <head>
+    <meta charset="utf-8">
+    <title>Attrs</title>
+  </head>
+  <body>
+    <p>alpha</p>
+    <pre>code</pre>
+  </body>
+</html>
+`);
+  const noise = watchPage(page);
+  await open(page, file);
+
+  await page.locator('body > p').click();
+  await page.keyboard.press('End');
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Control+z');
+
+  // The snapshot serializes the live page: interpolating attribute values by hand
+  // truncated `a"b` to `a` and invented an attribute from the quote.
+  const attrs = await page.evaluate(() => ({
+    x: document.documentElement.getAttribute('data-x'),
+    title: document.documentElement.getAttribute('title'),
+    names: [...document.documentElement.attributes].map((a) => a.name).sort(),
+  }));
+  expect(attrs.x).toBe('a"b');
+  expect(attrs.title).toBe('a"b');
+  expect(attrs.names).toEqual(['data-neodoc', 'data-x', 'lang', 'title']);
+  expectClean(noise);
+});
+
+test('an undo after a <pre> line break puts the caret back at the end', async ({ page }) => {
+  const dir = await tmpDir();
+  const file = join(dir, 'pre.nd.html');
+  writeFileSync(file, `<!doctype html>
+<html data-neodoc="1" lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Pre</title>
+  </head>
+  <body>
+    <p>alpha</p>
+    <pre>code</pre>
+  </body>
+</html>
+`);
+  const noise = watchPage(page);
+  await open(page, file);
+
+  await page.locator('pre').click();
+  await page.keyboard.press('End');
+  await page.keyboard.press('Enter'); // leaves the caret at an element position
+  await page.keyboard.press('Control+z');
+  await page.keyboard.type('y');
+  await expect(page.locator('pre')).toHaveText('codey');
+  expectClean(noise);
+});

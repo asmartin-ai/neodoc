@@ -10,6 +10,7 @@
 //     plain `outerHTML` write never would.
 
 import { test, expect } from '@playwright/test';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   FIXTURE_NAME, SERVERLESS_EDITOR, downloadText, expectCanonical, expectClean, stagedFixture, tmpDir, watchPage,
@@ -54,5 +55,45 @@ test('opens a fixture and saves canonical bytes (fmt --check)', async ({ page })
   await expect(page.locator('#st-state')).toContainText(FIXTURE_NAME);
   await expect(page.locator('#st-dirty')).toHaveText('saved');
 
+  expectClean(noise);
+});
+
+test('head metadata survives a save', async ({ page }) => {
+  const dir = await tmpDir();
+  const file = join(dir, 'meta.nd.html');
+  // The editor writes what its live page holds, so head children it does not adopt are
+  // head children the next save deletes.
+  writeFileSync(file, `<!doctype html>
+<html data-neodoc="1" lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Meta</title>
+    <meta content="neodoc 1.0.0" name="generator">
+    <meta content="Ken" name="author">
+    <meta content="2026-01-01" name="date">
+    <meta content="a summary" name="description">
+  </head>
+  <body>
+    <p>hi</p>
+  </body>
+</html>
+`);
+  const noise = watchPage(page);
+
+  await page.goto(SERVERLESS_EDITOR);
+  await page.waitForFunction(() => !!window.neodocEditor);
+  await page.setInputFiles('#open-input', file);
+  await expect(page.locator('body > p')).toHaveText('hi');
+
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.locator('button[data-cmd="save"]').click(),
+  ]);
+  const saved = await downloadText(download);
+  for (const meta of ['name="author"', 'name="date"', 'name="description"']) {
+    expect(saved, `${meta} must survive a save`).toContain(meta);
+  }
+  expect(saved).toContain('content="Ken"');
+  await expectCanonical(saved, join(dir, 'saved.nd.html'));
   expectClean(noise);
 });

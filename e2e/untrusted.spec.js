@@ -151,7 +151,9 @@ test('a document cannot retarget the editor page through its head', async ({ pag
   await page.goto(SERVERLESS_EDITOR);
   await page.waitForFunction(() => !!window.neodocEditor);
   await page.setInputFiles('#open-input', file);
-  await expect(page.locator('body > p')).toHaveText('Looks harmless.');
+  // A `meta[http-equiv]` cannot be adopted without acting, and *not* adopting it would
+  // silently delete it on the next save, so the document is refused.
+  await expect(page.locator('#st-state')).toContainText(/refused/i);
   await page.waitForTimeout(400); // a refresh would have fired by now
   expect(page.url()).toContain('neodoc-editor.html');
   expect(outside.filter((u) => !u.includes('/doc'))).toEqual([]);

@@ -4745,22 +4745,39 @@ const PASTE_DROP = new Set(['script', 'style', 'iframe', 'object', 'embed', 'for
 // keeps them (they are content) and `lint` reports them, so a document containing
 // one is refused here instead of being loaded — see README "Threat model".
 const UNSAFE_IN_BODY = new Set(['script', 'style', 'link', 'base', 'meta', 'iframe', 'object', 'embed']);
-/**
- * May `applyDocument` adopt this head element into the editor's own page?
- *
- * Only the document's name and its charset declaration. A `<style>` would be a second
- * stylesheet for the page the editor lives in (`normalizeHead` already replaced the
- * document's own with the canonical one, so there is nothing to adopt anyway), and
- * `meta[http-equiv]` — measured — retargets the page: `<meta name="refresh"
- * http-equiv="refresh" content="0;url=http://…">` survives `fmt` and Chromium navigates
- * the editor away. A `<script>` or `<link>` never reaches this page either way.
- */
 /** Does this URL use a scheme that runs or loads in *this* page? */
 const executableUrl = (href) => /^\s*(javascript|vbscript|data):/i.test(href.replace(/[\t\n\r]/g, ''));
 
-function safeFromHead(node) {
-  if (node.name === 'title') return true;
-  return node.name === 'meta' && (node.attrs || {}).charset !== undefined;
+/**
+ * What may the editor do with this head child?
+ *
+ * `adopt`: `title`, `style` (already replaced by the canonical one) and any `meta`
+ * without `http-equiv` — the document's name, charset, author, date, description.
+ * `refuse`: `script`, `link`, `base` and `meta[http-equiv]`, which would execute, fetch
+ * or retarget in the editor's own page (measured: a refresh meta navigates it), and
+ * anything that is not metadata at all, which would render above the document.
+ *
+ * A head child the editor does **not** adopt is a head child the next save deletes,
+ * because `canonicalText()` serializes what the live page holds — so refusing is the
+ * only honest alternative to adopting. Narrowing this to `title` + `meta[charset]` once
+ * dropped every `meta[name]` (author, date, description) from the file, silently.
+ */
+function headPolicy(node) {
+  const name = RENAMES[node.name] || String(node.name).toLowerCase();
+  if (name === 'title' || name === 'style') return 'adopt';
+  if (name !== 'meta') return 'refuse';
+  return (node.attrs || {})['http-equiv'] === undefined ? 'adopt' : 'refuse';
+}
+
+/** Head children this page must not adopt, by name. */
+function unsafeHeadElements(root) {
+  const html = (root.children || []).find((c) => c.type === 'element' && c.name === 'html');
+  const head = html && (html.children || []).find((c) => c.name === 'head');
+  const found = new Set();
+  for (const c of (head && head.children) || []) {
+    if (c.type === 'element' && headPolicy(c) === 'refuse') found.add(RENAMES[c.name] || String(c.name).toLowerCase());
+  }
+  return [...found];
 }
 
 const state = {
@@ -4934,7 +4951,7 @@ function applyDocument(src) {
   const body = html && (html.children || []).find((c) => c.name === 'body');
   state.mode = head && head.children.some((c) => c.name === 'style') ? 'inline' : 'none';
   for (const n of [...document.head.children]) if (!EDITOR_HEAD.has(n)) n.remove();
-  const adoptable = (head ? head.children : []).filter((c) => c.type === 'element' && safeFromHead(c));
+  const adoptable = (head ? head.children : []).filter((c) => c.type === 'element' && headPolicy(c) === 'adopt');
   document.head.append(...adoptable.map(treeToDom).filter(Boolean), ...EDITOR_HEAD);
   for (const a of [...document.documentElement.attributes]) {
     if (!(a.name in ((html && html.attrs) || {}))) document.documentElement.removeAttribute(a.name);
@@ -5020,8 +5037,11 @@ function documentText() {
   const one = (n) => (n.nodeType === 1 ? n.outerHTML : n.nodeType === 8 ? `<!--${n.textContent}-->` : n.textContent);
   const head = [...document.head.children].flatMap((n) => (EDITOR_HEAD.has(n) ? [] : [one(n)])).join('\n');
   const body = [...document.body.childNodes].flatMap((n) => (n === CHROME ? [] : [one(n)])).join('\n');
-  const root = [...document.documentElement.attributes].map((a) => ` ${a.name}="${a.value}"`).join('');
-  return `<!doctype html>\n<html${root}>\n<head>\n${head}\n</head>\n<body>\n${body}\n</body>\n</html>`
+  // `cloneNode(false).outerHTML` is the open tag, escaped the way the serializer would
+  // it: interpolating `a.value` by hand truncated `data-x="a&quot;b"` to `a` and
+  // invented an attribute out of the quote.
+  const open = document.documentElement.cloneNode(false).outerHTML;
+  return `<!doctype html>\n${open}\n<head>\n${head}\n</head>\n<body>\n${body}\n</body>\n</html>`
     .split(ZERO).join('');
 }
 
@@ -5043,7 +5063,15 @@ function caretMark() {
   const block = range && blockOf(range.startContainer);
   if (!block) return null;
   const mark = { selector: liveSelector(block), order: leafBlocks().indexOf(block), offset: 0 };
-  if (range.startContainer.nodeType !== 3) return mark;
+  if (range.startContainer.nodeType !== 3) {
+    // An element position — the caret after a `<pre>` line break, say. The offset is
+    // the text before it, so an undo does not put the caret at the start of the block.
+    const before = document.createRange();
+    before.setStart(block, 0);
+    before.setEnd(range.startContainer, range.startOffset);
+    mark.offset = before.toString().split(ZERO).join('').length;
+    return mark;
+  }
   const walk = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
   let offset = 0;
   for (let n = walk.nextNode(); n && n !== range.startContainer; n = walk.nextNode()) offset += n.length;
@@ -5070,7 +5098,9 @@ function restoreCaret(mark) {
     if (took) caretEndOf(took);
     return;
   }
-  let left = mark.offset;
+  // The block may have lost text (the change being undone added it, like a `<pre>` line
+  // break): an offset past the end means "the end", not an empty caret position.
+  let left = Math.min(mark.offset, textOnly(block.textContent || '').length);
   const walk = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
   for (let n = walk.nextNode(); n; n = walk.nextNode()) {
     if (left <= n.length) { setCaret(n, left); return; }
@@ -5101,10 +5131,14 @@ function mutate(fn) {
 
 async function openText(name, src, handle = null) {
   const { text: canonical, warnings } = format(src, { style: modeOfText(src) });
-  const unsafe = unsafeBodyElements(parse(canonical).root);
+  const root = parse(canonical).root;
+  const unsafe = [
+    ...unsafeBodyElements(root).map((n) => `<${n}> in the body`),
+    ...unsafeHeadElements(root).map((n) => `<${n}> in the head`),
+  ];
   if (unsafe.length) {
-    status(`refused ${name}: <${unsafe.join('>, <')}> in the body can run or fetch in this page — remove it with another tool, then open it here`);
-    console.warn('neodoc: refused to open', name, '— body contains', unsafe);
+    status(`refused ${name}: ${unsafe.join(', ')} can run, fetch or retarget in this page — remove it with another tool, then open it here`);
+    console.warn('neodoc: refused to open', name, '—', unsafe);
     return false;
   }
   state.name = name || state.name;
