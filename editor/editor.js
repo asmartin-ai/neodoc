@@ -17,7 +17,7 @@
 
 import { format, formatFragment, serialize } from '../src/format.js';
 import { parse } from '../src/parse.js';
-import { RENAMES, VOCAB, isAttrAllowed } from '../src/tree.js';
+import { RENAMES, VOCAB, isAttrAllowed, isExecutableUrl } from '../src/tree.js';
 import { query } from '../src/select.js';
 import { fromMarkdown } from '../src/markdown.js';
 import {
@@ -52,9 +52,6 @@ const PASTE_DROP = new Set(['script', 'style', 'iframe', 'object', 'embed', 'for
 // keeps them (they are content) and `lint` reports them, so a document containing
 // one is refused here instead of being loaded — see README "Threat model".
 const UNSAFE_IN_BODY = new Set(['script', 'style', 'link', 'base', 'meta', 'iframe', 'object', 'embed']);
-/** Does this URL use a scheme that runs or loads in *this* page? */
-const executableUrl = (href) => /^\s*(javascript|vbscript|data):/i.test(href.replace(/[\t\n\r]/g, ''));
-
 /**
  * What may the editor do with this head child?
  *
@@ -1115,7 +1112,7 @@ function sanitizeTree(node) {
       const ok = /^(https?:|mailto:|#|\/|\.)/i.test(href) || /^[\w.~-]+(\/|$)/.test(href);
       // The HTML parser removes tab/LF/CR from a URL before resolving it, so the
       // check has to see `java\tscript:` as `javascript:`.
-      if (!ok || executableUrl(href)) delete attrs.href;
+      if (!ok || isExecutableUrl(href)) delete attrs.href;
       if (!attrs.href && !attrs.id) { kids.push(...(c.children || [])); continue; }
     }
     if (name === 'img') {
@@ -1503,7 +1500,7 @@ refresh();
 // this page rather than opening somewhere else.
 document.addEventListener('click', (e) => {
   const hit = e.target instanceof Element ? e.target.closest('a[href]') : null;
-  if (hit && executableUrl(hit.getAttribute('href') || '')) {
+  if (hit && isExecutableUrl(hit.getAttribute('href') || '')) {
     e.preventDefault();
     status('refused a link with an executable URL');
   }

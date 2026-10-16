@@ -3,7 +3,7 @@
 
 import { formatTree } from './format.js';
 import { parse } from './parse.js';
-import { ATTR_VALUES, descendants, HEAD_MOVED, HEAD_ONLY, isAttrAllowed, isDroppedAttr, isEl, RENAMES, VOCAB } from './tree.js';
+import { ATTR_VALUES, descendants, HEAD_MOVED, HEAD_ONLY, isAttrAllowed, isDroppedAttr, isEl, isExecutableUrl, RENAMES, VOCAB } from './tree.js';
 
 const REQUIRED_ATTRS = { img: ['src', 'alt'] };
 
@@ -76,6 +76,11 @@ export function lint(text) {
       if (key === 'data-thread') threads.add(value);
       if (key === 'data-at' && !/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?(Z|[+-]\d{2}:\d{2})?)?$/.test(value)) {
         add(line, 'timestamp', `data-at "${value}" is not ISO-8601`);
+      }
+      // A link or an image source that runs in the page that opens the document: the
+      // editor refuses such a click, but the file itself is still the hazard, so say so.
+      if ((key === 'href' || key === 'src') && isExecutableUrl(value) && !(name === 'img' && key === 'src' && /^\s*data:image\//i.test(value))) {
+        add(line, 'url-scheme', `${key}="${value.slice(0, 40)}" runs in the page that opens this document`);
       }
       const allowed = ATTR_VALUES[key];
       if (allowed && !allowed.has(value)) {

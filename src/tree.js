@@ -41,6 +41,15 @@ export const HEAD_ONLY = new Set(['title', 'meta', 'style', 'link', 'base']);
  *  quietly promoted them into the head. */
 export const HEAD_MOVED = new Set(['title']);
 
+/**
+ * Does this URL use a scheme that runs or fetches in the page that shows the document?
+ *
+ * The HTML parser removes tab/LF/CR from a URL before resolving it, so `java\tscript:` is
+ * `javascript:`. Relative URLs, `http(s)`, `mailto:` and the rest are fine; `data:` is
+ * only ever legitimate for an image source, which the caller decides.
+ */
+export const isExecutableUrl = (href) => /^\s*(javascript|vbscript|data):/i.test(String(href).replace(/[\t\n\r]/g, ''));
+
 /** Attribute values SPEC §3 fixes as an enumeration. */
 export const ATTR_VALUES = {
   'data-align': new Set(['left', 'center', 'right']),

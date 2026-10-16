@@ -196,6 +196,19 @@ test('head placement: content moves to the body, metadata stays, nothing is drop
   assert.deepEqual(lint(fmt(two)), []);
 });
 
+test('a link that runs in the page showing the document is reported', () => {
+  const doc = (body) => `<!doctype html><html data-neodoc="1" lang="en"><head><meta charset="utf-8"><title>t</title>`
+    + `<meta content="neodoc 1.0.0" name="generator"></head><body>${body}</body></html>`;
+  const bad = doc('<p><a href="java\tscript:alert(1)">x</a></p><p><img alt="a" src="javascript:1"></p>');
+  // The tab inside the scheme is what the HTML parser removes before resolving it.
+  assert.equal(lint(bad).filter((f) => f.rule === 'url-scheme').length, 2);
+  const fine = doc('<p><a href="https://example.com">x</a></p><p><a href="mailto:a@b.example">m</a></p>'
+    + '<p><a href="#anchor">#</a></p><p><img alt="a" src="data:image/png;base64,AAAA"></p>');
+  assert.deepEqual(lint(fine).filter((f) => f.rule === 'url-scheme'), [], 'a data: image and ordinary links are fine');
+  const dataLink = doc('<p><a href="data:text/html,&lt;script&gt;">x</a></p>');
+  assert.equal(lint(dataLink).filter((f) => f.rule === 'url-scheme').length, 1, 'a data: *link* is not');
+});
+
 test('a finding fmt cannot repair is not advertised as fixable', () => {
   const doc = '<!doctype html><html data-neodoc="1" lang="en"><head><meta charset="utf-8"><title>t</title>'
     + '<foo>x</foo></head><body><p>y</p></body></html>';

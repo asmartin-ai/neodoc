@@ -180,6 +180,15 @@ const HEAD_ONLY = new Set(['title', 'meta', 'style', 'link', 'base']);
  *  quietly promoted them into the head. */
 const HEAD_MOVED = new Set(['title']);
 
+/**
+ * Does this URL use a scheme that runs or fetches in the page that shows the document?
+ *
+ * The HTML parser removes tab/LF/CR from a URL before resolving it, so `java\tscript:` is
+ * `javascript:`. Relative URLs, `http(s)`, `mailto:` and the rest are fine; `data:` is
+ * only ever legitimate for an image source, which the caller decides.
+ */
+const isExecutableUrl = (href) => /^\s*(javascript|vbscript|data):/i.test(String(href).replace(/[\t\n\r]/g, ''));
+
 /** Attribute values SPEC §3 fixes as an enumeration. */
 const ATTR_VALUES = {
   'data-align': new Set(['left', 'center', 'right']),
@@ -306,7 +315,7 @@ function parentOf(root, target) {
   return null;
 }
 
-__mods["src/tree"] = {VOID, INLINE, HEADINGS, BLOCK, VOCAB, GLOBAL_ATTRS, HEAD_ONLY, HEAD_MOVED, ATTR_VALUES, ATTRS, isAttrAllowed, DROP_ATTRS, isDroppedAttr, RENAMES, hasBlockChild, isEmptyInline, el, txt, cmt, isEl, textOf, walk, descendants, pathOf, parentOf};
+__mods["src/tree"] = {VOID, INLINE, HEADINGS, BLOCK, VOCAB, GLOBAL_ATTRS, HEAD_ONLY, HEAD_MOVED, isExecutableUrl, ATTR_VALUES, ATTRS, isAttrAllowed, DROP_ATTRS, isDroppedAttr, RENAMES, hasBlockChild, isEmptyInline, el, txt, cmt, isEl, textOf, walk, descendants, pathOf, parentOf};
 })();
 
 await (async function () {
@@ -4765,7 +4774,7 @@ await (async function () {
 
 const {format, formatFragment, serialize} = __mods["src/format"];
 const {parse} = __mods["src/parse"];
-const {RENAMES, VOCAB, isAttrAllowed} = __mods["src/tree"];
+const {RENAMES, VOCAB, isAttrAllowed, isExecutableUrl} = __mods["src/tree"];
 const {query} = __mods["src/select"];
 const {fromMarkdown} = __mods["src/markdown"];
 const {addComment, listComments, resolveComment, replyToComment, acceptChanges, rejectChanges,} = __mods["src/comments"];
@@ -4797,9 +4806,6 @@ const PASTE_DROP = new Set(['script', 'style', 'iframe', 'object', 'embed', 'for
 // keeps them (they are content) and `lint` reports them, so a document containing
 // one is refused here instead of being loaded — see README "Threat model".
 const UNSAFE_IN_BODY = new Set(['script', 'style', 'link', 'base', 'meta', 'iframe', 'object', 'embed']);
-/** Does this URL use a scheme that runs or loads in *this* page? */
-const executableUrl = (href) => /^\s*(javascript|vbscript|data):/i.test(href.replace(/[\t\n\r]/g, ''));
-
 /**
  * What may the editor do with this head child?
  *
@@ -5860,7 +5866,7 @@ function sanitizeTree(node) {
       const ok = /^(https?:|mailto:|#|\/|\.)/i.test(href) || /^[\w.~-]+(\/|$)/.test(href);
       // The HTML parser removes tab/LF/CR from a URL before resolving it, so the
       // check has to see `java\tscript:` as `javascript:`.
-      if (!ok || executableUrl(href)) delete attrs.href;
+      if (!ok || isExecutableUrl(href)) delete attrs.href;
       if (!attrs.href && !attrs.id) { kids.push(...(c.children || [])); continue; }
     }
     if (name === 'img') {
@@ -6248,7 +6254,7 @@ refresh();
 // this page rather than opening somewhere else.
 document.addEventListener('click', (e) => {
   const hit = e.target instanceof Element ? e.target.closest('a[href]') : null;
-  if (hit && executableUrl(hit.getAttribute('href') || '')) {
+  if (hit && isExecutableUrl(hit.getAttribute('href') || '')) {
     e.preventDefault();
     status('refused a link with an executable URL');
   }
