@@ -114,3 +114,35 @@ test('a nested <head> in the body cannot smuggle a script past the refusal', asy
   expect(await page.evaluate(() => document.body.querySelectorAll('script').length)).toBe(0);
   expectClean(noise);
 });
+
+test('a document cannot retarget the editor page through its head', async ({ page }) => {
+  const dir = await tmpDir();
+  const file = join(dir, 'refresh.nd.html');
+  // `meta[http-equiv=refresh]` survives `fmt` (it needs a `name`) and, adopted into the
+  // editor's head, navigated the page away — a fetch to wherever it pointed.
+  await writeFile(file, `<!doctype html>
+<html data-neodoc="1" lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Invoice</title>
+    <meta content="neodoc 1.0.0" name="generator">
+    <meta name="refresh" http-equiv="refresh" content="0;url=http://127.0.0.1:9/evil">
+  </head>
+  <body>
+    <p>Looks harmless.</p>
+  </body>
+</html>
+`);
+  const outside = [];
+  page.on('request', (req) => { if (!req.url().startsWith('file:')) outside.push(req.url()); });
+  const noise = watchPage(page);
+
+  await page.goto(SERVERLESS_EDITOR);
+  await page.waitForFunction(() => !!window.neodocEditor);
+  await page.setInputFiles('#open-input', file);
+  await expect(page.locator('body > p')).toHaveText('Looks harmless.');
+  await page.waitForTimeout(400); // a refresh would have fired by now
+  expect(page.url()).toContain('neodoc-editor.html');
+  expect(outside.filter((u) => !u.includes('/doc'))).toEqual([]);
+  expectClean(noise);
+});

@@ -52,9 +52,20 @@ const PASTE_DROP = new Set(['script', 'style', 'iframe', 'object', 'embed', 'for
 // keeps them (they are content) and `lint` reports them, so a document containing
 // one is refused here instead of being loaded — see README "Threat model".
 const UNSAFE_IN_BODY = new Set(['script', 'style', 'link', 'base', 'meta', 'iframe', 'object', 'embed']);
-// Elements `applyDocument` may adopt from a document's head; anything else is
-// reported and left out, so a head <script> never reaches this page.
-const SAFE_FROM_HEAD = new Set(['meta', 'title', 'style']);
+/**
+ * May `applyDocument` adopt this head element into the editor's own page?
+ *
+ * Only the document's name and its charset declaration. A `<style>` would be a second
+ * stylesheet for the page the editor lives in (`normalizeHead` already replaced the
+ * document's own with the canonical one, so there is nothing to adopt anyway), and
+ * `meta[http-equiv]` — measured — retargets the page: `<meta name="refresh"
+ * http-equiv="refresh" content="0;url=http://…">` survives `fmt` and Chromium navigates
+ * the editor away. A `<script>` or `<link>` never reaches this page either way.
+ */
+function safeFromHead(node) {
+  if (node.name === 'title') return true;
+  return node.name === 'meta' && (node.attrs || {}).charset !== undefined;
+}
 
 const state = { name: 'untitled.nd.html', mode: 'inline', dirty: false, handle: null, suggest: false, embed: true, undo: [] };
 
@@ -225,7 +236,7 @@ function applyDocument(src) {
   const body = html && (html.children || []).find((c) => c.name === 'body');
   state.mode = head && head.children.some((c) => c.name === 'style') ? 'inline' : 'none';
   for (const n of [...document.head.children]) if (!EDITOR_HEAD.has(n)) n.remove();
-  const adoptable = (head ? head.children : []).filter((c) => c.type === 'element' && SAFE_FROM_HEAD.has(c.name));
+  const adoptable = (head ? head.children : []).filter((c) => c.type === 'element' && safeFromHead(c));
   document.head.append(...adoptable.map(treeToDom).filter(Boolean), ...EDITOR_HEAD);
   for (const a of [...document.documentElement.attributes]) {
     if (!(a.name in ((html && html.attrs) || {}))) document.documentElement.removeAttribute(a.name);
