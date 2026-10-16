@@ -1,0 +1,4 @@
+node_modules/
+*.tmp
+.neodoc-*.tmp
+.DS_Store

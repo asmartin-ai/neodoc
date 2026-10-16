@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Neodoc editor</title>
+<!--
+  The editor's own stylesheet. It is an editor asset: editor.js keeps it out of
+  the canonical file (it is detached while src/format.js runs, see canonicalText).
+  The document's own <style> block arrives from the file and is re-inserted before
+  this link, so the document keeps rendering with its own theme.
+-->
+<link id="editor-css" rel="stylesheet" href="editor.css">
+</head>
+<!--
+  The body IS the document: its children are the document's blocks, and its
+  children are what src/format.js canonicalizes on save. #chrome is the only
+  editor-owned element in here and is detached during canonicalization.
+-->
+<body contenteditable="true" spellcheck="false">
+<p></p>
+<div id="chrome" contenteditable="false">
+  <div id="toolbar" role="toolbar" aria-label="Document commands">
+    <button type="button" data-cmd="open" aria-label="Open file">Open</button>
+    <button type="button" data-cmd="save" aria-label="Save file">Save</button>
+    <span class="sep" aria-hidden="true"></span>
+    <button type="button" data-cmd="strong" aria-label="Bold">B</button>
+    <button type="button" data-cmd="em" aria-label="Italic">I</button>
+    <button type="button" data-cmd="u" aria-label="Underline">U</button>
+    <button type="button" data-cmd="s" aria-label="Strikethrough">S</button>
+    <button type="button" data-cmd="code" aria-label="Inline code">&lt;&gt;</button>
+    <button type="button" data-cmd="mark" aria-label="Highlight">==</button>
+    <button type="button" data-cmd="a" aria-label="Link">Link</button>
+    <span class="sep" aria-hidden="true"></span>
+    <button type="button" data-cmd="h1" aria-label="Heading 1">H1</button>
+    <button type="button" data-cmd="h2" aria-label="Heading 2">H2</button>
+    <button type="button" data-cmd="h3" aria-label="Heading 3">H3</button>
+    <button type="button" data-cmd="ul" aria-label="Bullet list">UL</button>
+    <button type="button" data-cmd="ol" aria-label="Numbered list">OL</button>
+    <button type="button" data-cmd="blockquote" aria-label="Block quote">Quote</button>
+    <button type="button" data-cmd="pre" aria-label="Code block">Code</button>
+    <button type="button" data-cmd="hr" aria-label="Horizontal rule">Rule</button>
+    <button type="button" data-cmd="img" aria-label="Insert image">Image</button>
+    <span class="sep" aria-hidden="true"></span>
+    <button type="button" data-cmd="comment" aria-label="Comment on selection">Comment</button>
+    <button type="button" data-cmd="suggest" aria-label="Suggest changes" aria-pressed="false">Suggest</button>
+    <button type="button" data-cmd="accept" aria-label="Accept changes in block">Accept</button>
+    <button type="button" data-cmd="reject" aria-label="Reject changes in block">Reject</button>
+    <span class="sep" aria-hidden="true"></span>
+    <label class="switch"><input type="checkbox" id="embed" checked> embed images</label>
+  </div>
+
+  <aside id="sidebar" aria-label="Comment threads">
+    <h2>Comments</h2>
+    <p id="no-comments">No comments.</p>
+    <ol id="threads"></ol>
+  </aside>
+
+  <div id="statusbar">
+    <span id="st-state">no file open</span>
+    <span id="st-blocks">0 blocks</span>
+    <span id="st-sel">body</span>
+    <span id="st-comments">0 comments</span>
+    <button type="button" data-cmd="copy-cli" aria-label="Copy the neodoc command">Copy CLI</button>
+    <code id="st-cli"></code>
+  </div>
+
+  <input id="open-input" type="file" accept=".html,.htm,text/html" hidden aria-label="Open a Neodoc file">
+  <input id="image-input" type="file" accept="image/*" hidden aria-label="Insert an image">
+</div>
+<script type="module" src="editor.js"></script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+{
+  "name": "neodoc",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A single-file plaintext HTML document format — a .docx alternative.",
+  "license": "MIT",
+  "bin": {
+    "neodoc": "bin/neodoc.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "editor",
+    "docs"
+  ],
+  "scripts": {
+    "test": "node --test test/",
+    "lint": "oxlint",
+    "bench": "node bin/neodoc.js bench fixtures/big.nd.html"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@oxlint/plugins": "1.88.0",
+    "oxlint": "1.88.0"
+  }
+}

@@ -1,0 +1,94 @@
+<!doctype html>
+<html data-neodoc="1" lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Basic formatting</title>
+    <meta content="neodoc 1.0.0" name="generator">
+    <style>
+:root {
+  color-scheme: light dark;
+  --fg: #1b1b1b; --bg: #ffffff; --muted: #5c6570; --border: #d9d9d9;
+  --accent: #0b6bcb; --mark: #fff3b0; --ins: #1a7f37; --del: #b3261e; --code: #f4f5f7;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --fg: #e8e8e8; --bg: #15171b; --muted: #9aa3ad; --border: #343a42;
+    --accent: #6cb6ff; --mark: #4a3f00; --ins: #57d364; --del: #ff7b72; --code: #1d2026; }
+}
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0 auto; padding: 3rem 1.5rem 6rem; max-width: 44rem;
+  background: var(--bg); color: var(--fg); font: 16px/1.65 -apple-system, BlinkMacSystemFont,
+  "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+h1, h2, h3, h4, h5, h6 { line-height: 1.25; margin: 2em 0 0.5em; font-weight: 650; }
+h1 { font-size: 2rem; } h2 { font-size: 1.5rem; } h3 { font-size: 1.2rem; }
+h1:first-child, h2:first-child { margin-top: 0; }
+p, ul, ol, blockquote, table, figure, pre { margin: 0 0 1em; }
+a { color: var(--accent); }
+code, kbd { font: 0.92em/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: var(--code); padding: 0.1em 0.3em; border-radius: 3px; }
+pre { background: var(--code); padding: 0.75em 0.9em; border-radius: 6px; overflow-x: auto; }
+pre code { background: none; padding: 0; }
+blockquote { margin-left: 0; padding-left: 1em; border-left: 3px solid var(--border); color: var(--muted); }
+ul, ol { padding-left: 1.5em; }
+li[data-checked] { list-style: none; margin-left: -1.2em; }
+li[data-checked]::before { content: "\2610\00a0"; }
+li[data-checked="true"] { color: var(--muted); }
+li[data-checked="true"]::before { content: "\2611\00a0"; }
+table { border-collapse: collapse; width: 100%; }
+th, td { border: 1px solid var(--border); padding: 0.4em 0.6em; text-align: left; vertical-align: top; }
+th { background: var(--code); font-weight: 650; }
+td[data-align="center"], th[data-align="center"] { text-align: center; }
+td[data-align="right"], th[data-align="right"] { text-align: right; }
+figure { text-align: center; }
+figure img { max-width: 100%; height: auto; }
+figcaption { color: var(--muted); font-size: 0.9em; margin-top: 0.4em; }
+img { max-width: 100%; height: auto; }
+hr { border: 0; border-top: 1px solid var(--border); margin: 2em 0; }
+mark[data-c] { background: var(--mark); padding: 0.05em 0.1em; }
+ins { color: var(--ins); text-decoration: underline; }
+del { color: var(--del); text-decoration: line-through; }
+aside { margin: 0 0 1em; padding: 0.5em 0.9em; border-left: 3px solid var(--border);
+  border-radius: 0 6px 6px 0; background: var(--code); font-size: 0.95em; }
+aside[data-thread] { border-left-color: var(--accent); }
+aside[data-thread] p[data-author]::before { content: attr(data-author) " \00b7 "; color: var(--muted); }
+aside[data-thread][data-state="resolved"] { display: none; }
+aside[data-note="warn"] { border-left-color: #d19d00; }
+aside[data-note="danger"] { border-left-color: var(--del); }
+aside[data-note="tip"] { border-left-color: var(--ins); }
+@page { margin: 20mm 18mm; }
+@media print {
+  :root { color-scheme: light; }
+  body { max-width: none; padding: 0; color: #000; background: #fff; }
+  a { color: inherit; text-decoration: none; }
+  pre, figure, table, aside, blockquote { break-inside: avoid; }
+  h1, h2, h3, h4 { break-after: avoid; }
+  p, li { orphans: 3; widows: 3; }
+  mark[data-c] { background: none; border-bottom: 1px dotted #888; }
+}
+</style>
+  </head>
+  <body>
+    <h1 id="h-basic">Basic formatting</h1>
+    <p>Plain text with <strong>bold</strong>, <em>italic</em>, <code>inline code</code> and a <a href="https://example.com/docs">link</a>.</p>
+    <p>A hard break here:<br>second line.</p>
+    <h2>Lists</h2>
+    <ul>
+      <li>one</li>
+      <li>two</li>
+    </ul>
+    <ol start="3">
+      <li>third</li>
+      <li>fourth</li>
+    </ol>
+    <blockquote>
+      <p>Quoted text.</p>
+    </blockquote>
+    <h2>Code</h2>
+    <pre data-lang="js">const a = 1;
+    const b = 2;</pre>
+    <hr>
+    <section id="s-notes">
+      <h2>Notes</h2>
+      <p>Closing paragraph with <s>struck</s> and <mark>highlighted</mark> text.</p>
+    </section>
+  </body>
+</html>
