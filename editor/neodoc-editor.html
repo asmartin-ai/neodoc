@@ -1,0 +1,3424 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Neodoc editor</title>
+<style>
+/* Editor chrome only.
+   Styles for the document itself come from the document's own canonical
+   <style> block (docs/SPEC.md §6), which is inserted into <head> ahead of this
+   file, so nothing here restyles document content except the editing affordances.
+   This file is never written to the saved document. */
+
+#chrome { position: fixed; inset: 0; pointer-events: none; z-index: 10; font: 13px system-ui, sans-serif; color: #111; }
+#chrome button, #chrome input, #chrome label { pointer-events: auto; }
+
+/* Document content must not hide under the fixed toolbars. */
+@media screen {
+  body { padding-top: 3.4rem; padding-bottom: 2.6rem; padding-right: 17rem; }
+  @media (max-width: 60rem) { body { padding-right: 1rem; } }
+}
+
+/* ---- toolbar ---- */
+#toolbar {
+  position: absolute; top: 0; left: 0; right: 0; display: flex; flex-wrap: wrap;
+  gap: 2px; align-items: center; padding: 4px 6px; background: #f6f6f7;
+  border-bottom: 1px solid #d8d8da; pointer-events: auto;
+}
+#toolbar button {
+  font: inherit; padding: 3px 7px; border: 1px solid #c9c9cd; border-radius: 4px;
+  background: #fff; cursor: pointer;
+}
+#toolbar button:hover { background: #ececef; }
+#toolbar button[aria-pressed="true"] { background: #d7e7ff; border-color: #7aa7e0; }
+#toolbar .sep { width: 1px; height: 18px; background: #cfcfd4; margin: 0 4px; }
+#toolbar .switch { display: inline-flex; gap: 4px; align-items: center; margin-left: 4px; }
+
+/* ---- comment sidebar ---- */
+#sidebar {
+  position: absolute; top: 3.4rem; right: 0; bottom: 2.6rem; width: 16rem; overflow: auto;
+  background: #fbfbfc; border-left: 1px solid #d8d8da; padding: 8px 10px;
+  pointer-events: auto; font-size: 12px;
+}
+#sidebar h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: #555; margin: 0 0 6px; }
+#sidebar ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+#sidebar li { border: 1px solid #dcdce0; border-radius: 4px; padding: 6px; background: #fff; }
+#sidebar li b { display: block; color: #333; }
+#sidebar li p { margin: 4px 0; }
+#sidebar li blockquote { margin: 4px 0; padding-left: 6px; border-left: 2px solid #dcdce0; color: #666; }
+#sidebar button { font: inherit; font-size: 11px; margin-right: 4px; padding: 2px 6px; cursor: pointer; }
+#sidebar li[data-resolved] { opacity: .6; }
+
+/* ---- status bar ---- */
+#statusbar {
+  position: absolute; left: 0; right: 0; bottom: 0; display: flex; gap: 12px; align-items: center;
+  padding: 4px 8px; background: #f6f6f7; border-top: 1px solid #d8d8da;
+  pointer-events: auto; font-size: 12px; overflow: hidden;
+}
+#statusbar > span { white-space: nowrap; }
+#statusbar #st-state { color: #444; }
+#statusbar #st-dirty[data-dirty="true"] { color: #a2450b; font-weight: 600; }
+#statusbar #st-sel { color: #444; font-family: ui-monospace, monospace; }
+#statusbar #st-cli {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: #555; font-family: ui-monospace, monospace;
+}
+#statusbar button { font: inherit; padding: 1px 6px; cursor: pointer; }
+
+/* ---- editing affordances (document content, editor-only) ---- */
+body:focus { outline: none; }
+/* An empty block has no height of its own; give the caret somewhere to sit.
+   This is CSS only — no placeholder character is ever written to the DOM. */
+p:empty, h1:empty, h2:empty, h3:empty, h4:empty, h5:empty, h6:empty, li:empty {
+  min-height: 1.2em;
+}
+</style>
+</head>
+<body contenteditable="true" spellcheck="false">
+<p></p>
+<div id="chrome" contenteditable="false">
+  <!--
+    The body IS the document: its children are the document's blocks and are what
+    src/format.js canonicalizes on save. #chrome is the only editor-owned element
+    in here and is detached while format() runs; every comment inside it is safe
+    because this element never reaches the file. Comments anywhere else in this
+    page do: the HTML parser moves them into the body, where format() keeps them.
+  -->
+  <div id="toolbar" role="toolbar" aria-label="Document commands">
+    <button type="button" data-cmd="open" aria-label="Open file">Open</button>
+    <button type="button" data-cmd="save" aria-label="Save file">Save</button>
+    <span class="sep" aria-hidden="true"></span>
+    <button type="button" data-cmd="strong" aria-label="Bold">B</button>
+    <button type="button" data-cmd="em" aria-label="Italic">I</button>
+    <button type="button" data-cmd="u" aria-label="Underline">U</button>
+    <button type="button" data-cmd="s" aria-label="Strikethrough">S</button>
+    <button type="button" data-cmd="code" aria-label="Inline code">&lt;&gt;</button>
+    <button type="button" data-cmd="mark" aria-label="Highlight">==</button>
+    <button type="button" data-cmd="a" aria-label="Link">Link</button>
+    <span class="sep" aria-hidden="true"></span>
+    <button type="button" data-cmd="h1" aria-label="Heading 1">H1</button>
+    <button type="button" data-cmd="h2" aria-label="Heading 2">H2</button>
+    <button type="button" data-cmd="h3" aria-label="Heading 3">H3</button>
+    <button type="button" data-cmd="ul" aria-label="Bullet list">UL</button>
+    <button type="button" data-cmd="ol" aria-label="Numbered list">OL</button>
+    <button type="button" data-cmd="blockquote" aria-label="Block quote">Quote</button>
+    <button type="button" data-cmd="pre" aria-label="Code block">Code</button>
+    <button type="button" data-cmd="hr" aria-label="Horizontal rule">Rule</button>
+    <button type="button" data-cmd="img" aria-label="Insert image">Image</button>
+    <span class="sep" aria-hidden="true"></span>
+    <button type="button" data-cmd="comment" aria-label="Comment on selection">Comment</button>
+    <button type="button" data-cmd="suggest" aria-label="Suggest changes" aria-pressed="false">Suggest</button>
+    <button type="button" data-cmd="accept" aria-label="Accept changes in block">Accept</button>
+    <button type="button" data-cmd="reject" aria-label="Reject changes in block">Reject</button>
+    <span class="sep" aria-hidden="true"></span>
+    <label class="switch"><input type="checkbox" id="embed" checked> embed images</label>
+  </div>
+
+  <aside id="sidebar" aria-label="Comment threads">
+    <h2>Comments</h2>
+    <p id="no-comments">No comments.</p>
+    <ol id="threads"></ol>
+  </aside>
+
+  <div id="statusbar">
+    <span id="st-dirty" data-dirty="false">saved</span>
+    <span id="st-state">no file open</span>
+    <span id="st-blocks">0 blocks</span>
+    <span id="st-sel">body</span>
+    <span id="st-comments">0 comments</span>
+    <button type="button" data-cmd="copy-cli" aria-label="Copy the neodoc command">Copy CLI</button>
+    <code id="st-cli"></code>
+  </div>
+
+  <input id="open-input" type="file" accept=".html,.htm,text/html" hidden aria-label="Open a Neodoc file">
+  <input id="image-input" type="file" accept="image/*" hidden aria-label="Insert an image">
+</div>
+<script type="module">
+// Generated by tools/bundle.js from editor/editor.js + src/*.js — do not edit by hand.
+const __mods = {};
+await (async function () {
+// Neodoc tree model — the in-memory document. Shared by CLI and browser.
+
+const VOID = new Set(['br', 'hr', 'img', 'meta']);
+const RAW = new Set(['style', 'script', 'pre', 'textarea', 'title']);
+
+const INLINE = new Set([
+  'strong', 'em', 'code', 's', 'u', 'mark', 'sub', 'sup', 'ins', 'del', 'a', 'img', 'br',
+]);
+
+const HEADINGS = new Set(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']);
+
+/** Layout grouping: children of these go one per line. Also includes forbidden
+ *  elements (div/script/link) so that a file we must not destroy still formats. */
+const BLOCK = new Set([
+  'html', 'head', 'body', 'meta', 'title', 'style', 'script', 'link',
+  ...HEADINGS,
+  'p', 'blockquote', 'pre', 'ul', 'ol', 'li',
+  'table', 'thead', 'tbody', 'tr', 'th', 'td', 'figure', 'figcaption', 'hr', 'section',
+  'aside', 'div',
+]);
+
+/** Elements allowed in a Neodoc document. Everything else is a lint error. */
+const VOCAB = new Set([
+  'html', 'head', 'body', 'meta', 'title', 'style',
+  ...HEADINGS,
+  'p', 'blockquote', 'pre', 'ul', 'ol', 'li',
+  'table', 'thead', 'tbody', 'tr', 'th', 'td', 'figure', 'figcaption', 'hr', 'section',
+  'aside',
+  ...INLINE,
+]);
+
+const GLOBAL_ATTRS = new Set(['id', 'title', 'lang', 'dir']);
+
+const ATTRS = {
+  a: new Set(['href', 'target', 'rel']),
+  img: new Set(['src', 'alt', 'width', 'height']),
+  ol: new Set(['start', 'reversed']),
+  td: new Set(['colspan', 'rowspan', 'scope', 'data-align']),
+  th: new Set(['colspan', 'rowspan', 'scope', 'data-align']),
+  li: new Set(['data-checked']),
+  pre: new Set(['data-lang']),
+  section: new Set(['data-title']),
+  mark: new Set(['data-c']),
+  aside: new Set(['data-thread', 'data-state', 'data-note']),
+  p: new Set(['data-author', 'data-at']),
+  ins: new Set(['data-author', 'data-at']),
+  del: new Set(['data-author', 'data-at']),
+  meta: new Set(['name', 'content', 'charset']),
+  html: new Set(['data-neodoc']),
+};
+
+function isAttrAllowed(elName, name) {
+  if (GLOBAL_ATTRS.has(name) || name.startsWith('data-')) return true;
+  const set = ATTRS[elName];
+  return !!set && set.has(name);
+}
+
+const RENAMES = { b: 'strong', i: 'em', strike: 's' };
+
+/** Does this child list require block layout (one child per line)? */
+function hasBlockChild(children) {
+  return (children || []).some((c) => c.type === 'comment' || (c.type === 'element' && BLOCK.has(c.name)));
+}
+
+/** An inline element with nothing inside it is dropped by the normalizer. */
+function isEmptyInline(node) {
+  return node.type === 'element' && INLINE.has(node.name) && !VOID.has(node.name)
+    && (node.children || []).length === 0;
+}
+
+function el(name, attrs = {}, children = []) {
+  return { type: 'element', name, attrs, children };
+}
+function txt(text) {
+  return { type: 'text', text };
+}
+function cmt(text) {
+  return { type: 'comment', text };
+}
+
+const isEl = (n, name) => n.type === 'element' && (name === undefined || n.name === name);
+const isText = (n) => n.type === 'text';
+const isComment = (n) => n.type === 'comment';
+
+function textOf(node) {
+  let out = '';
+  walk(node, (n) => {
+    if (n.type === 'text') out += n.text;
+    if (n.type === 'element' && n.name === 'br') out += '\n';
+  });
+  return out;
+}
+
+function walk(node, fn) {
+  fn(node);
+  if (node.children) for (const c of node.children) walk(c, fn);
+}
+
+function* descendants(node) {
+  for (const c of node.children || []) {
+    yield c;
+    yield* descendants(c);
+  }
+}
+
+function childrenOf(node, name) {
+  return (node.children || []).filter((c) => isEl(c, name));
+}
+
+function findById(node, id) {
+  for (const d of descendants(node)) if (isEl(d) && d.attrs.id === id) return d;
+  return null;
+}
+
+function clone(node) {
+  const copy = { ...node };
+  if (node.attrs) copy.attrs = { ...node.attrs };
+  if (node.children) copy.children = node.children.map(clone);
+  return copy;
+}
+
+/** Round-trippable selector for `node` under `root`, e.g. `body > p:nth-of-type(1)`. */
+function pathOf(root, target) {
+  const parts = [];
+  let node = target;
+  while (node && node !== root) {
+    const parent = (root.children || []).includes(node) ? root : parentOf(root, node);
+    if (!parent) break;
+    const sameTag = (parent.children || []).filter((c) => isEl(c) && c.name === node.name);
+    let seg = node.name;
+    // A tag that occurs once among its siblings needs no positional suffix, so
+    // `body` stays `body`; only genuinely ambiguous siblings get indexed.
+    if (node.attrs && node.attrs.id) seg += `#${node.attrs.id}`;
+    else if (sameTag.length > 1) seg += `:nth-of-type(${sameTag.indexOf(node) + 1})`;
+    parts.unshift(seg);
+    node = parent;
+  }
+  return parts.join(' > ');
+}
+
+function parentOf(root, target) {
+  for (const d of descendants(root)) if ((d.children || []).includes(target)) return d;
+  return null;
+}
+
+__mods["src/tree"] = {VOID, RAW, INLINE, HEADINGS, BLOCK, VOCAB, GLOBAL_ATTRS, ATTRS, isAttrAllowed, RENAMES, hasBlockChild, isEmptyInline, el, txt, cmt, isEl, isText, isComment, textOf, walk, descendants, childrenOf, findById, clone, pathOf, parentOf};
+})();
+
+await (async function () {
+// Entity encode/decode for the canonical escaping rules (docs/SPEC.md §4.3).
+// Canonical output escapes exactly & < > in text and & < " in attributes.
+// Input may contain any valid HTML character reference; we decode it to a
+// literal character so the file converges on literal UTF-8.
+
+const NAMED = {
+  amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: '\u00a0',
+  copy: '\u00a9', reg: '\u00ae', trade: '\u2122', deg: '\u00b0', middot: '\u00b7',
+  laquo: '\u00ab', raquo: '\u00bb', sect: '\u00a7', para: '\u00b6', bull: '\u2022',
+  hellip: '\u2026', mdash: '\u2014', ndash: '\u2013', minus: '\u2212', times: '\u00d7',
+  divide: '\u00f7', plusmn: '\u00b1', frac12: '\u00bd', frac14: '\u00bc', frac34: '\u00be',
+  lsquo: '\u2018', rsquo: '\u2019', ldquo: '\u201c', rdquo: '\u201d', sbquo: '\u201a',
+  bdquo: '\u201e', dagger: '\u2020', Dagger: '\u2021', permil: '\u2030', prime: '\u2032',
+  Prime: '\u2033', euro: '\u20ac', pound: '\u00a3', yen: '\u00a5', cent: '\u00a2',
+  curren: '\u00a4', larr: '\u2190', rarr: '\u2192', uarr: '\u2191', darr: '\u2193',
+  harr: '\u2194', ne: '\u2260', le: '\u2264', ge: '\u2265', infin: '\u221e',
+  alpha: '\u03b1', beta: '\u03b2', gamma: '\u03b3', delta: '\u03b4', pi: '\u03c0',
+  mu: '\u03bc', sigma: '\u03c3', Omega: '\u03a9', omega: '\u03c9', radic: '\u221a',
+  part: '\u2202', sum: '\u2211', prod: '\u220f', int: '\u222b', asymp: '\u2248',
+  equiv: '\u2261', nbsp2: '\u00a0', shy: '\u00ad', ensp: '\u2002', emsp: '\u2003',
+  thinsp: '\u2009', zwj: '\u200d', zwnj: '\u200c', check: '\u2713', cross: '\u2717',
+  star: '\u2605', hearts: '\u2665', diams: '\u2666', clubs: '\u2663', spades: '\u2660',
+};
+
+function decodeEntities(s) {
+  if (!s.includes('&')) return s;
+  return s.replace(/&(#[0-9]+|#[xX][0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*);?/g, (m, body) => {
+    if (body[0] === '#') {
+      const cp = body[1] === 'x' || body[1] === 'X' ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
+      if (!Number.isFinite(cp) || cp <= 0 || cp > 0x10ffff) return m;
+      try {
+        return String.fromCodePoint(cp);
+      } catch {
+        return m;
+      }
+    }
+    return Object.prototype.hasOwnProperty.call(NAMED, body) ? NAMED[body] : m;
+  });
+}
+
+function escapeText(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function escapeAttr(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+}
+
+__mods["src/entities"] = {decodeEntities, escapeText, escapeAttr};
+})();
+
+await (async function () {
+// HTML subset parser (docs/SPEC.md §3). Tolerant: it records errors instead of
+// throwing, so `neodoc lint` can report on files a browser would still render.
+// Handles implied end tags (p/li/td/tr) so browser-pasted HTML and hand-written
+// HTML both parse. Raw-text elements (style/script/pre/title) are not tokenized.
+
+const {VOID} = __mods["src/tree"];
+const {decodeEntities} = __mods["src/entities"];
+const RAW_TEXT = new Set(['style', 'script', 'pre', 'textarea', 'title']);
+const MODE = { pre: 'pre', style: 'raw', script: 'raw', textarea: 'raw' };
+
+const IMPLIED_END = {
+  p: new Set(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'table',
+    'blockquote', 'pre', 'section', 'aside', 'figure', 'hr', 'head', 'body', 'dl', 'div']),
+  li: new Set(['li']),
+  td: new Set(['td', 'th', 'tr', 'thead', 'tbody', 'tfoot']),
+  th: new Set(['td', 'th', 'tr', 'thead', 'tbody', 'tfoot']),
+  tr: new Set(['tr', 'thead', 'tbody', 'tfoot']),
+  option: new Set(['option']),
+};
+
+const NAME_CH = /[a-zA-Z0-9:_.-]/;
+
+function readTag(src, i) {
+  let j = i + 1;
+  let name = '';
+  while (j < src.length && NAME_CH.test(src[j])) name += src[j++];
+  name = name.toLowerCase();
+  const attrs = {};
+  let selfClosing = false;
+  while (j < src.length) {
+    while (j < src.length && /\s/.test(src[j])) j++;
+    if (src[j] === '>') { j++; break; }
+    if (src[j] === '/' && src[j + 1] === '>') { selfClosing = true; j += 2; break; }
+    if (j >= src.length) break;
+    let an = '';
+    while (j < src.length && !/[\s=>/]/.test(src[j])) an += src[j++];
+    if (!an) { j++; continue; }
+    let av = '';
+    while (j < src.length && /\s/.test(src[j])) j++;
+    if (src[j] === '=') {
+      j++;
+      while (j < src.length && /\s/.test(src[j])) j++;
+      const q = src[j];
+      if (q === '"' || q === "'") {
+        const endQ = src.indexOf(q, j + 1);
+        av = src.slice(j + 1, endQ === -1 ? src.length : endQ);
+        j = endQ === -1 ? src.length : endQ + 1;
+      } else {
+        const s = j;
+        while (j < src.length && !/[\s>]/.test(src[j])) j++;
+        av = src.slice(s, j);
+      }
+    }
+    attrs[an.toLowerCase()] = decodeEntities(av);
+  }
+  return { name, attrs, selfClosing, end: j };
+}
+
+function findCloseTag(src, lower, name, from) {
+  const needle = `</${name}`;
+  let idx = lower.indexOf(needle, from);
+  while (idx !== -1) {
+    const after = src[idx + needle.length];
+    if (after === undefined || after === '>' || /\s/.test(after)) return idx;
+    idx = lower.indexOf(needle, idx + 1);
+  }
+  return -1;
+}
+
+/** Parse to `{ root, errors }`. `root` is a pseudo-element named `#root`. */
+function parse(src) {
+  const errors = [];
+  const root = { type: 'element', name: '#root', attrs: {}, children: [], pos: 0 };
+  const stack = [root];
+  const n = src.length;
+  const lower = src.toLowerCase();
+  let i = 0;
+
+  const parent = () => stack[stack.length - 1];
+  const err = (message, pos) => errors.push({ message, pos });
+
+  const addText = (target, raw, pos, mode) => {
+    if (!raw) return;
+    const node = { type: 'text', text: decodeEntities(raw), pos };
+    if (mode) node.mode = mode;
+    target.children.push(node);
+  };
+  const pushText = (raw, pos) => {
+    const p = parent();
+    const mode = p.type === 'element' ? MODE[p.name] : undefined;
+    addText(p, raw, pos, mode);
+  };
+  const closeImplied = (incoming) => {
+    while (stack.length > 1) {
+      const set = IMPLIED_END[parent().name];
+      if (set && set.has(incoming)) stack.pop();
+      else break;
+    }
+  };
+
+  while (i < n) {
+    const lt = src.indexOf('<', i);
+    if (lt === -1) { pushText(src.slice(i), i); break; }
+    if (lt > i) pushText(src.slice(i, lt), i);
+    i = lt;
+
+    if (src.startsWith('<!--', i)) {
+      const end = src.indexOf('-->', i + 4);
+      const body = src.slice(i + 4, end === -1 ? n : end);
+      parent().children.push({ type: 'comment', text: body, pos: i });
+      if (end === -1) { err('unterminated comment', i); break; }
+      i = end + 3;
+      continue;
+    }
+    if (/^<!doctype/i.test(src.slice(i, i + 10))) {
+      const end = src.indexOf('>', i);
+      parent().children.push({ type: 'doctype', text: 'doctype html', pos: i });
+      i = end === -1 ? n : end + 1;
+      continue;
+    }
+    if (src.startsWith('<!', i) || src.startsWith('<?', i)) {
+      const end = src.indexOf('>', i);
+      err('declaration dropped (only <!doctype html> is allowed)', i);
+      i = end === -1 ? n : end + 1;
+      continue;
+    }
+    if (src[i + 1] === '/') {
+      const m = /^<\/([a-zA-Z][^\s>]*)\s*>/.exec(src.slice(i, i + 300));
+      if (!m) { err('malformed end tag', i); pushText('<', i); i++; continue; }
+      const name = m[1].toLowerCase();
+      let k = stack.length - 1;
+      while (k > 0 && stack[k].name !== name) k--;
+      if (k === 0) err(`stray end tag </${name}>`, i);
+      else stack.length = k;
+      i += m[0].length;
+      continue;
+    }
+
+    const t = readTag(src, i);
+    if (!t.name) { err('malformed tag', i); pushText('<', i); i++; continue; }
+    closeImplied(t.name);
+    const node = { type: 'element', name: t.name, attrs: t.attrs, children: [], pos: i };
+    parent().children.push(node);
+    i = t.end;
+
+    if (RAW_TEXT.has(t.name) && !t.selfClosing) {
+      const close = findCloseTag(src, lower, t.name, i);
+      const stop = close === -1 ? n : close;
+      addText(node, src.slice(i, stop), i, MODE[t.name]);
+      if (close === -1) { err(`unterminated <${t.name}>`, node.pos); i = n; }
+      else { i = src.indexOf('>', close); i = i === -1 ? n : i + 1; }
+      continue;
+    }
+    if (!VOID.has(t.name) && !t.selfClosing) stack.push(node);
+  }
+
+  return { root, errors };
+}
+
+function parseToTree(src) {
+  return parse(src).root;
+}
+
+__mods["src/parse"] = {parse, parseToTree};
+})();
+
+await (async function () {
+// Canonical stylesheet, embedded in every document's <head> (docs/SPEC.md §6).
+// Presentation only: it never reorders content and never hides content except
+// resolved comment threads. Source of truth for `neodoc css` and `neodoc fmt`.
+
+const THEME_CSS = `:root {
+  color-scheme: light dark;
+  --fg: #1b1b1b; --bg: #ffffff; --muted: #5c6570; --border: #d9d9d9;
+  --accent: #0b6bcb; --mark: #fff3b0; --ins: #1a7f37; --del: #b3261e; --code: #f4f5f7;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --fg: #e8e8e8; --bg: #15171b; --muted: #9aa3ad; --border: #343a42;
+    --accent: #6cb6ff; --mark: #4a3f00; --ins: #57d364; --del: #ff7b72; --code: #1d2026; }
+}
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0 auto; padding: 3rem 1.5rem 6rem; max-width: 44rem;
+  background: var(--bg); color: var(--fg); font: 16px/1.65 -apple-system, BlinkMacSystemFont,
+  "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+h1, h2, h3, h4, h5, h6 { line-height: 1.25; margin: 2em 0 0.5em; font-weight: 650; }
+h1 { font-size: 2rem; } h2 { font-size: 1.5rem; } h3 { font-size: 1.2rem; }
+h1:first-child, h2:first-child { margin-top: 0; }
+p, ul, ol, blockquote, table, figure, pre { margin: 0 0 1em; }
+a { color: var(--accent); }
+code, kbd { font: 0.92em/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: var(--code); padding: 0.1em 0.3em; border-radius: 3px; }
+pre { background: var(--code); padding: 0.75em 0.9em; border-radius: 6px; overflow-x: auto; }
+pre code { background: none; padding: 0; }
+blockquote { margin-left: 0; padding-left: 1em; border-left: 3px solid var(--border); color: var(--muted); }
+ul, ol { padding-left: 1.5em; }
+li[data-checked] { list-style: none; margin-left: -1.2em; }
+li[data-checked]::before { content: "\\2610\\00a0"; }
+li[data-checked="true"] { color: var(--muted); }
+li[data-checked="true"]::before { content: "\\2611\\00a0"; }
+table { border-collapse: collapse; width: 100%; }
+th, td { border: 1px solid var(--border); padding: 0.4em 0.6em; text-align: left; vertical-align: top; }
+th { background: var(--code); font-weight: 650; }
+td[data-align="center"], th[data-align="center"] { text-align: center; }
+td[data-align="right"], th[data-align="right"] { text-align: right; }
+figure { text-align: center; }
+figure img { max-width: 100%; height: auto; }
+figcaption { color: var(--muted); font-size: 0.9em; margin-top: 0.4em; }
+img { max-width: 100%; height: auto; }
+hr { border: 0; border-top: 1px solid var(--border); margin: 2em 0; }
+mark[data-c] { background: var(--mark); padding: 0.05em 0.1em; }
+ins { color: var(--ins); text-decoration: underline; }
+del { color: var(--del); text-decoration: line-through; }
+aside { margin: 0 0 1em; padding: 0.5em 0.9em; border-left: 3px solid var(--border);
+  border-radius: 0 6px 6px 0; background: var(--code); font-size: 0.95em; }
+aside[data-thread] { border-left-color: var(--accent); }
+aside[data-thread] p[data-author]::before { content: attr(data-author) " \\00b7 "; color: var(--muted); }
+aside[data-thread][data-state="resolved"] { display: none; }
+aside[data-note="warn"] { border-left-color: #d19d00; }
+aside[data-note="danger"] { border-left-color: var(--del); }
+aside[data-note="tip"] { border-left-color: var(--ins); }
+@page { margin: 20mm 18mm; }
+@media print {
+  :root { color-scheme: light; }
+  body { max-width: none; padding: 0; color: #000; background: #fff; }
+  a { color: inherit; text-decoration: none; }
+  pre, figure, table, aside, blockquote { break-inside: avoid; }
+  h1, h2, h3, h4 { break-after: avoid; }
+  p, li { orphans: 3; widows: 3; }
+  mark[data-c] { background: none; border-bottom: 1px dotted #888; }
+}
+`;
+
+__mods["src/theme"] = {THEME_CSS};
+})();
+
+await (async function () {
+const VERSION = '1.0.0';
+const GENERATOR = `neodoc ${VERSION}`;
+
+__mods["src/version"] = {VERSION, GENERATOR};
+})();
+
+await (async function () {
+// Normalization + canonical serialization (docs/SPEC.md §4). `format` is the
+// whole contract: parse → normalize → serialize, and it is idempotent.
+//
+// ponytail: whitespace model is collapse-runs + trim-block-edges, not CSS
+// white-space emulation; upgrade when a user needs significant leading spaces
+// in inline content. No HTML5 tree-construction (no foster parenting); upgrade
+// when a real document hits table-misnesting cases.
+
+const {parse} = __mods["src/parse"];
+const {THEME_CSS} = __mods["src/theme"];
+const {GENERATOR} = __mods["src/version"];
+const {ATTRS, GLOBAL_ATTRS, RENAMES, VOID, hasBlockChild, isEmptyInline} = __mods["src/tree"];
+const {escapeText, escapeAttr} = __mods["src/entities"];
+const INDENT = '  ';
+
+const DROP_ATTRS = new Set(['align', 'border', 'cellpadding', 'cellspacing', 'bgcolor',
+  'color', 'face', 'valign', 'style', 'class', 'onclick', 'onload', 'role']);
+
+// ---------------------------------------------------------------- normalization
+
+function cleanAttrs(node, warnings) {
+  const out = {};
+  for (const rawKey of Object.keys(node.attrs)) {
+    const key = rawKey.toLowerCase();
+    const value = node.attrs[rawKey];
+    if (key === 'align' && (node.name === 'td' || node.name === 'th')) {
+      out['data-align'] = value.toLowerCase();
+      continue;
+    }
+    if (!isAllowed(node.name, key, warnings)) continue;
+    out[key] = value;
+  }
+  if (node.name === 'img') {
+    if (out.alt === undefined) out.alt = '';
+    if (out.width && !/^\d+$/.test(out.width)) delete out.width;
+    if (out.height && !/^\d+$/.test(out.height)) delete out.height;
+  }
+  if (node.name === 'a' && out.target === '_blank' && !out.rel) out.rel = 'noopener';
+  return out;
+}
+
+function isAllowed(name, key, warnings) {
+  if (DROP_ATTRS.has(key)) {
+    warnings.push(`${name}: dropped attribute "${key}" (presentational)`);
+    return false;
+  }
+  if (GLOBAL_ATTRS.has(key) || key.startsWith('data-')) return true;
+  const set = ATTRS[name];
+  if (set && set.has(key)) return true;
+  warnings.push(`${name}: dropped unknown attribute "${key}"`);
+  return false;
+}
+
+const INLINE_MERGEABLE = new Set(['strong', 'em', 's', 'u', 'del', 'ins', 'mark', 'code', 'sub', 'sup']);
+
+function normalizeElement(node, warnings) {
+  const name = RENAMES[node.name] || node.name;
+  const out = {
+    type: 'element',
+    name,
+    attrs: cleanAttrs({ ...node, name }, warnings),
+    children: normalizeChildren(node.children || [], name, warnings),
+  };
+  // merge <strong><strong>x</strong></strong>
+  while (out.children.length === 1 && INLINE_MERGEABLE.has(name)) {
+    const only = out.children[0];
+    if (only.type === 'element' && only.name === name && Object.keys(only.attrs).length === 0) {
+      out.children = only.children;
+    } else break;
+  }
+  return out;
+}
+
+function normalizeChildren(children, parentName, warnings) {
+  const mapped = [];
+  for (const child of children) {
+    if (child.type === 'element') {
+      const norm = normalizeElement(child, warnings);
+      if (isEmptyInline(norm)) continue;
+      mapped.push(norm);
+    } else if (child.type === 'text') {
+      if (child.mode === 'pre' && parentName === 'pre') {
+        mapped.push({ type: 'text', text: normalizePre(child.text), mode: 'pre' });
+      } else if (child.mode === 'raw') {
+        mapped.push({ type: 'text', text: stripTrailingBlank(child.text), mode: 'raw' });
+      } else {
+        mapped.push({ type: 'text', text: child.text });
+      }
+    } else {
+      mapped.push({ ...child, text: String(child.text ?? '').replace(/--+/g, '-').trim() });
+    }
+  }
+  return fixWhitespace(mapped);
+}
+
+function stripTrailingBlank(text) {
+  return text.replace(/\r\n?/g, '\n').replace(/\s+$/, '') + '\n';
+}
+
+/** Whitespace model, docs/SPEC.md §4.4. */
+function fixWhitespace(children) {
+  const block = hasBlockChild(children);
+  const kept = [];
+  for (const child of children) {
+    if (child.type !== 'text' || child.mode) { kept.push(child); continue; }
+    const collapsed = child.text.replace(/\s+/g, ' ');
+    if (block) {
+      if (collapsed.trim() !== '') kept.push({ ...child, text: collapsed.trim() });
+      continue;
+    }
+    if (collapsed === ' ') {
+      const beforeSomething = kept.length > 0;
+      kept.push({ ...child, text: ' ' });
+      if (!beforeSomething) kept.pop();
+      continue;
+    }
+    kept.push({ ...child, text: collapsed });
+  }
+  if (!block && kept.length > 0) {
+    const first = kept[0];
+    if (first.type === 'text') kept[0] = { ...first, text: first.text.replace(/^ +/, '') };
+    const lastIdx = kept.length - 1;
+    const last = kept[lastIdx];
+    if (last.type === 'text') kept[lastIdx] = { ...last, text: last.text.replace(/ +$/, '') };
+  }
+  return kept.filter((c) => !(c.type === 'text' && c.text === ''));
+}
+
+/** Strip the indentation the serializer added to pre continuation lines. */
+function normalizePre(text) {
+  const t = text.replace(/\r\n?/g, '\n');
+  if (!t.includes('\n')) return t;
+  const lines = t.split('\n');
+  while (lines.length && lines[lines.length - 1] === '') lines.pop();
+  let min = Infinity;
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i].trim() === '') continue;
+    const m = /^[ \t]*/.exec(lines[i])[0].length;
+    if (m < min) min = m;
+  }
+  if (Number.isFinite(min) && min > 0) {
+    for (let i = 1; i < lines.length; i++) lines[i] = lines[i].slice(min);
+  }
+  return lines.join('\n');
+}
+
+// ------------------------------------------------------------------- head/body
+
+function normalizeDocument(root, warnings = [], opts = {}) {
+  const found = root.children.find((c) => c.type === 'element' && c.name === 'html');
+  const loose = root.children.filter((c) => c !== found && c.type !== 'doctype');
+  const looseHead = loose.find((c) => c.name === 'head');
+  const looseBody = loose.find((c) => c.name === 'body');
+  const rest = loose.filter((c) => c !== looseHead && c !== looseBody);
+  const html = normalizeElement(
+    found ?? { type: 'element', name: 'html', attrs: { lang: 'en' }, children: [] },
+    warnings,
+  );
+  const oldHead = html.children.find((c) => c.name === 'head') ?? looseHead;
+  const oldBody = html.children.find((c) => c.name === 'body') ?? looseBody;
+  const stray = html.children.filter((c) => c.name !== 'head' && c.name !== 'body');
+  const head = normalizeHead(normalizeChildren(oldHead ? oldHead.children : [], 'head', warnings), warnings, opts);
+  const body = {
+    type: 'element',
+    name: 'body',
+    attrs: oldBody ? oldBody.attrs : {},
+    children: normalizeChildren([...(oldBody ? oldBody.children : []), ...stray, ...rest], 'body', warnings),
+  };
+  if (html.attrs['data-neodoc'] !== '1') { html.attrs['data-neodoc'] = '1'; warnings.push('set data-neodoc="1"'); }
+  if (!html.attrs.lang) { html.attrs.lang = 'en'; warnings.push('added lang="en"'); }
+  html.children = [head, body];
+  root.children = [{ type: 'doctype' }, html];
+  return root;
+}
+
+const HEAD_ORDER = ['author', 'date', 'description', 'keywords'];
+const metaRank = (name) => (name === 'generator' ? 2 : HEAD_ORDER.includes(name) ? 0 : 1);
+
+function normalizeHead(children, warnings, opts) {
+  const metas = [];
+  let title = null;
+  for (const child of children) {
+    if (child.name === 'title') {
+      if (title) warnings.push('dropped duplicate <title>');
+      else title = child;
+    } else if (child.name === 'meta') {
+      const { name, charset } = child.attrs;
+      if (name === 'generator' || charset) continue; // canonical forms, re-emitted below
+      if (name) metas.push(child);
+      else warnings.push('dropped <meta> without a name or charset');
+    } else if (child.name === 'style') {
+      if (opts.style !== 'none' && String(child.children?.[0]?.text ?? '').trim() !== THEME_CSS.trim()) {
+        warnings.push('replaced the <style> block with the canonical stylesheet');
+      }
+    } else {
+      warnings.push(`dropped <${child.name}> from <head>`);
+    }
+  }
+  if (!title) { title = { type: 'element', name: 'title', attrs: {}, children: [] }; warnings.push('added missing <title>'); }
+  metas.sort((a, b) => metaRank(a.attrs.name) - metaRank(b.attrs.name)
+    || a.attrs.name.localeCompare(b.attrs.name));
+  metas.push({ type: 'element', name: 'meta', attrs: { content: GENERATOR, name: 'generator' }, children: [] });
+  const headChildren = [
+    { type: 'element', name: 'meta', attrs: { charset: 'utf-8' }, children: [] },
+    title,
+    ...metas,
+  ];
+  if (opts.style !== 'none') {
+    headChildren.push({ type: 'element', name: 'style', attrs: {}, children: [{ type: 'text', text: THEME_CSS, mode: 'raw' }] });
+  }
+  return { type: 'element', name: 'head', attrs: {}, children: headChildren };
+}
+
+// ----------------------------------------------------------------- serialization
+
+function attrString(node) {
+  const keys = Object.keys(node.attrs || {}).sort();
+  let out = '';
+  for (const k of keys) out += ` ${k}="${escapeAttr(String(node.attrs[k]))}"`;
+  return out;
+}
+
+function emitInline(node) {
+  if (node.type === 'text') return escapeText(node.text);
+  if (node.type === 'comment') return `<!--${node.text}-->`;
+  if (node.type === 'doctype') return '<!doctype html>';
+  const attrs = attrString(node);
+  if (VOID.has(node.name)) return `<${node.name}${attrs}>`;
+  return `<${node.name}${attrs}>${(node.children || []).map(emitInline).join('')}</${node.name}>`;
+}
+
+function emitBlock(node, depth, out) {
+  const pad = INDENT.repeat(depth);
+  if (node.type === 'doctype') { out.push(`${pad}<!doctype html>`); return; }
+  if (node.type === 'comment') { out.push(`${pad}<!--${node.text}-->`); return; }
+  if (node.type === 'text') { out.push(pad + escapeText(node.text)); return; }
+  const name = node.name;
+  const open = `<${name}${attrString(node)}>`;
+  if (name === 'style' || name === 'script') {
+    // Emitted at column 0 so the canonical CSS is byte-comparable.
+    out.push(`${pad}${open}`);
+    const body = (node.children || []).map((c) => c.text ?? '').join('').replace(/\s+$/, '');
+    for (const line of body.split('\n')) out.push(line);
+    out.push(`</${name}>`);
+    return;
+  }
+  if (name === 'pre') {
+    const body = escapeText((node.children || []).map((c) => c.text ?? '').join(''));
+    const lines = body.split('\n');
+    let chunk = pad + open + lines[0];
+    for (let i = 1; i < lines.length; i++) chunk += '\n' + (lines[i] === '' ? '' : pad + lines[i]);
+    out.push(`${chunk}</${name}>`);
+    return;
+  }
+  if (VOID.has(name)) { out.push(pad + open); return; }
+  const kids = node.children || [];
+  if (hasBlockChild(kids)) {
+    out.push(pad + open);
+    for (const c of kids) emitBlock(c, depth + 1, out);
+    out.push(`${pad}</${name}>`);
+    return;
+  }
+  out.push(pad + open + kids.map(emitInline).join('') + `</${name}>`);
+}
+
+function serialize(root) {
+  const out = [];
+  for (const child of root.children) emitBlock(child, 0, out);
+  return out.join('\n') + '\n';
+}
+
+// ---------------------------------------------------------------------- public
+
+/** Canonicalize a whole document. Returns `{ text, warnings }`. */
+function format(html, opts = {}) {
+  const { root, errors } = parse(html);
+  const warnings = errors.map((e) => `${e.message} (offset ${e.pos})`);
+  normalizeDocument(root, warnings, opts);
+  return { text: serialize(root), warnings };
+}
+
+/** Canonicalize a fragment (headless HTML) into normalized nodes at depth 0. */
+function normalizeFragment(html) {
+  const { root, errors } = parse(html);
+  const warnings = errors.map((e) => `${e.message} (offset ${e.pos})`);
+  const top = root.children.filter((c) => c.type !== 'doctype');
+  const container = top.length === 1 && (top[0].name === 'html' || top[0].name === 'body') ? top[0] : null;
+  const nodes = container
+    ? (container.children.find((c) => c.name === 'body')?.children ?? container.children)
+    : top;
+  return { nodes: normalizeChildren(nodes, 'body', warnings), warnings };
+}
+
+/** Canonicalize a fragment into block lines at depth 0 (for showing/splicing). */
+function formatFragment(html) {
+  const { nodes, warnings } = normalizeFragment(html);
+  const lines = [];
+  for (const node of nodes) emitBlock(node, 0, lines);
+  return { lines, warnings };
+}
+
+/** Prefix canonical lines so they can be spliced at `depth`. */
+function reindent(lines, depth) {
+  const pad = INDENT.repeat(depth);
+  return lines.map((l) => (l === '' ? l : pad + l));
+}
+
+__mods["src/format"] = {INDENT, normalizePre, normalizeDocument, emitInline, emitBlock, serialize, format, normalizeFragment, formatFragment, reindent};
+})();
+
+await (async function () {
+// CSS-subset selector engine over the Neodoc parse tree (docs/SPEC.md §7).
+// There is no DOM: matching walks the tree structure only, never text.
+//
+// Root rule: a selector matches *descendants* of `root`, never `root` itself.
+// One documented exception: the bare selector `body` returns the body element,
+// so the CLI can address the document root that all body-scoped selectors hang
+// off. `body > section` needs no exception — the sections are descendants.
+//
+// ponytail: every query is a linear scan of the subtree (one parent map, built
+// once per call), not an index; upgrade when a big document makes repeated
+// queries visible in `neodoc bench`. No `an+b`, `:nth-last-child`, `:has` —
+// the vocabulary does not need them.
+
+const {descendants, isEl, pathOf, walk} = __mods["src/tree"];
+const WS = /\s/;
+const IDENT_CH = /[A-Za-z0-9_-]/;
+
+const isWs = (ch) => WS.test(ch);
+
+function skipWs(s, i) {
+  let j = i;
+  while (j < s.length && isWs(s[j])) j++;
+  return j;
+}
+
+function readIdent(s, i) {
+  let j = i;
+  while (j < s.length && IDENT_CH.test(s[j])) j++;
+  return s.slice(i, j);
+}
+
+// ------------------------------------------------------------------- parsing
+
+/** `[attr]`, `[attr=val]`, `[attr^=val]`, `[attr$=val]`, `[attr*=val]`; `i` is at `[`. */
+function parseAttr(s, i) {
+  let j = skipWs(s, i + 1);
+  const name = readIdent(s, j);
+  if (!name) throw new Error('missing attribute name in [ ]');
+  j = skipWs(s, j + name.length);
+  if (j >= s.length) throw new Error(`unclosed [ in selector (attribute '${name}')`);
+  if (s[j] === ']') return [{ name: name.toLowerCase(), op: null, value: null }, j + 1];
+  const two = s.slice(j, j + 2);
+  const op = two === '^=' || two === '$=' || two === '*=' ? two : s[j] === '=' ? '=' : null;
+  if (!op) throw new Error(`unsupported attribute operator '${s[j]}' in [${name}...]`);
+  j = skipWs(s, j + op.length);
+  let value;
+  const quote = s[j];
+  if (quote === '"' || quote === "'") {
+    const end = s.indexOf(quote, j + 1);
+    if (end === -1) throw new Error(`unclosed quoted value in [${name}${op}...]`);
+    value = s.slice(j + 1, end);
+    j = end + 1;
+  } else {
+    const start = j;
+    while (j < s.length && !isWs(s[j]) && s[j] !== ']') j++;
+    value = s.slice(start, j);
+    if (!value) throw new Error(`missing value after '${op}' in [${name}${op}]`);
+  }
+  j = skipWs(s, j);
+  if (s[j] !== ']') throw new Error(`unclosed [ in selector (attribute '${name}')`);
+  return [{ name: name.toLowerCase(), op, value }, j + 1];
+}
+
+/** `:first-child`, `:last-child`, `:nth-child(n)`, `:nth-of-type(n)`, `:not(simple)`; `i` is at `:`. */
+function parsePseudo(s, i) {
+  const name = readIdent(s, i + 1).toLowerCase();
+  if (!name) throw new Error(`empty pseudo-class after ':' at ${i}`);
+  let j = i + 1 + name.length;
+  if (s[j] !== '(') {
+    if (name === 'first-child' || name === 'last-child') return [{ name }, j];
+    throw new Error(`unsupported pseudo-class :${name}`);
+  }
+  let depth = 0;
+  let k = j;
+  for (; k < s.length; k++) {
+    if (s[k] === '(') depth++;
+    else if (s[k] === ')' && --depth === 0) break;
+  }
+  if (k >= s.length) throw new Error(`unclosed ( in :${name}(`);
+  const arg = s.slice(j + 1, k).trim();
+  j = k + 1;
+  if (name === 'nth-child' || name === 'nth-of-type') {
+    if (!/^\d+$/.test(arg)) {
+      throw new Error(`unsupported :${name}(${arg}) — only a plain 1-based integer is allowed`);
+    }
+    if (+arg < 1) throw new Error(`:${name}() is 1-based, got ${arg}`);
+    return [{ name, arg: +arg }, j];
+  }
+  if (name === 'not') {
+    if (!arg) throw new Error(':not() needs a tag, #id or [attr]');
+    const [inner, end] = parseCompound(arg, 0);
+    if (skipWs(arg, end) !== arg.length || inner.tag === '*' || inner.pseudos.length) {
+      throw new Error(`unsupported :not(${arg}) — only a single tag, #id or [attr] is allowed`);
+    }
+    return [{ name: 'not', arg: inner }, j];
+  }
+  throw new Error(`unsupported pseudo-class :${name}()`);
+}
+
+/** A compound is `tag`? `#id`? `[attr]`* pseudo*; `i` is at its first character. */
+function parseCompound(s, i) {
+  const compound = { tag: null, id: null, attrs: [], pseudos: [] };
+  let j = i;
+  while (j < s.length && !isWs(s[j]) && s[j] !== '>' && s[j] !== ',') {
+    const ch = s[j];
+    if (ch === '*') {
+      if (compound.tag) throw new Error(`unexpected '*' in selector at ${j}`);
+      compound.tag = '*';
+      j++;
+    } else if (ch === '#') {
+      const id = readIdent(s, j + 1);
+      if (!id) throw new Error(`empty #id in selector at ${j}`);
+      if (compound.id) throw new Error('two #id parts in one selector compound');
+      compound.id = id;
+      j += 1 + id.length;
+    } else if (ch === '[') {
+      const [attr, next] = parseAttr(s, j);
+      compound.attrs.push(attr);
+      j = next;
+    } else if (ch === ':') {
+      const [pseudo, next] = parsePseudo(s, j);
+      compound.pseudos.push(pseudo);
+      j = next;
+    } else if (ch === '.') {
+      throw new Error(`class selectors are not supported: .${readIdent(s, j + 1)}`);
+    } else if (/[A-Za-z]/.test(ch)) {
+      if (compound.tag) throw new Error(`unexpected tag '${readIdent(s, j)}' in selector at ${j}`);
+      const name = readIdent(s, j);
+      compound.tag = name.toLowerCase();
+      j += name.length;
+    } else {
+      throw new Error(`unexpected '${ch}' in selector at ${j}`);
+    }
+  }
+  if (!compound.tag && !compound.id && !compound.attrs.length && !compound.pseudos.length) {
+    throw new Error(`empty selector part at position ${i}`);
+  }
+  return [compound, j];
+}
+
+/**
+ * Parse a selector. Returns `{ text, groups }` where each group is a list of
+ * `{ combinator, compound }` parts in source order (`combinator` is `'self'` for
+ * the first part, then `'descendant'` or `'child'`). Throws `Error` on bad syntax.
+ */
+function parseSelector(text) {
+  if (typeof text !== 'string') throw new Error('selector must be a string');
+  const s = text.trim();
+  if (!s) throw new Error('empty selector');
+  const groups = [];
+  let i = 0;
+  for (;;) {
+    i = skipWs(s, i);
+    if (i >= s.length) throw new Error('empty selector part (stray or trailing comma)');
+    const parts = [];
+    const [first, afterFirst] = parseCompound(s, i);
+    parts.push({ combinator: 'self', compound: first });
+    i = afterFirst;
+    for (;;) {
+      const skipped = skipWs(s, i);
+      const hadWs = skipped > i;
+      i = skipped;
+      if (i >= s.length || s[i] === ',') break;
+      if (s[i] === '>') {
+        i = skipWs(s, i + 1);
+        if (i >= s.length) throw new Error("expected an element after '>'");
+        const [compound, end] = parseCompound(s, i);
+        parts.push({ combinator: 'child', compound });
+        i = end;
+      } else {
+        if (s[i] === '+' || s[i] === '~' || s[i] === '|') {
+          throw new Error(`unsupported combinator '${s[i]}' — use a space or '>'`);
+        }
+        if (!hadWs) throw new Error(`expected a combinator before '${s[i]}'`);
+        const [compound, end] = parseCompound(s, i);
+        parts.push({ combinator: 'descendant', compound });
+        i = end;
+      }
+    }
+    groups.push(parts);
+    if (i >= s.length) break;
+    i++; // the comma
+  }
+  return { text: s, groups };
+}
+
+// ------------------------------------------------------------------ matching
+
+function parentMap(root) {
+  const map = new Map();
+  walk(root, (node) => {
+    for (const child of node.children || []) map.set(child, node);
+  });
+  return map;
+}
+
+const elementChildren = (parent) =>
+  (parent && parent.children ? parent.children.filter((c) => isEl(c)) : []);
+
+function matchCompound(node, compound, parents) {
+  if (compound.tag && compound.tag !== '*' && node.name !== compound.tag) return false;
+  const attrs = node.attrs || {};
+  if (compound.id !== null && attrs.id !== compound.id) return false;
+  for (const attr of compound.attrs) {
+    if (!Object.prototype.hasOwnProperty.call(attrs, attr.name)) return false;
+    const value = attrs[attr.name];
+    if (attr.op === '=' && value !== attr.value) return false;
+    else if (attr.op === '^=' && !value.startsWith(attr.value)) return false;
+    else if (attr.op === '$=' && !value.endsWith(attr.value)) return false;
+    else if (attr.op === '*=' && !value.includes(attr.value)) return false;
+  }
+  if (!compound.pseudos.length) return true;
+  const siblings = elementChildren(parents.get(node));
+  for (const pseudo of compound.pseudos) {
+    if (pseudo.name === 'not') {
+      if (matchCompound(node, pseudo.arg, parents)) return false;
+    } else if (pseudo.name === 'first-child') {
+      if (siblings[0] !== node) return false;
+    } else if (pseudo.name === 'last-child') {
+      if (siblings[siblings.length - 1] !== node) return false;
+    } else if (pseudo.name === 'nth-child') {
+      if (siblings[pseudo.arg - 1] !== node) return false;
+    } else if (pseudo.name === 'nth-of-type') {
+      const sameTag = siblings.filter((c) => c.name === node.name);
+      if (sameTag[pseudo.arg - 1] !== node) return false;
+    }
+  }
+  return true;
+}
+
+/** Right-to-left: the rightmost compound must match `node`, then walk leftwards up. */
+function matchesComplex(node, parents, parts, k) {
+  if (!matchCompound(node, parts[k].compound, parents)) return false;
+  if (k === 0) return true;
+  let parent = parents.get(node);
+  if (parts[k].combinator === 'child') {
+    return !!parent && isEl(parent) && matchesComplex(parent, parents, parts, k - 1);
+  }
+  while (parent && isEl(parent)) {
+    if (matchesComplex(parent, parents, parts, k - 1)) return true;
+    parent = parents.get(parent);
+  }
+  return false;
+}
+
+const isBareBody = (sel) =>
+  sel.groups.length === 1
+  && sel.groups[0].length === 1
+  && (() => {
+    const c = sel.groups[0][0].compound;
+    return c.tag === 'body' && c.id === null && !c.attrs.length && !c.pseudos.length;
+  })();
+
+function hit(node, parents) {
+  const parent = parents.get(node) || null;
+  return { node, parent, index: parent ? parent.children.indexOf(node) : -1 };
+}
+
+/**
+ * All matches for `selectorText` (or a parsed selector), in document order, no
+ * duplicates. Each result is `{ node, parent, index }`.
+ */
+function queryAll(root, selectorText) {
+  const sel = typeof selectorText === 'string' ? parseSelector(selectorText) : selectorText;
+  if (!sel || !sel.groups) throw new Error('selector must be a string or parseSelector() result');
+  const parents = parentMap(root);
+  const out = [];
+  if (isBareBody(sel)) {
+    let body = isEl(root, 'body') ? root : null;
+    if (!body) for (const node of descendants(root)) if (isEl(node, 'body')) { body = node; break; }
+    if (body) out.push(hit(body, parents));
+    return out;
+  }
+  for (const node of descendants(root)) {
+    if (!isEl(node)) continue;
+    for (const parts of sel.groups) {
+      if (matchesComplex(node, parents, parts, parts.length - 1)) {
+        out.push(hit(node, parents));
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+/** The first match in document order, or `null`. */
+function query(root, selectorText) {
+  return queryAll(root, selectorText)[0] || null;
+}
+
+/** Round-trippable selector for `node` — the same string `pathOf` builds. */
+function selectorOf(root, node) {
+  return pathOf(root, node);
+}
+
+__mods["src/select"] = {parseSelector, queryAll, query, selectorOf};
+})();
+
+await (async function () {
+// Markdown ⇄ Neodoc body (docs/SPEC.md §8).
+//
+// `toMarkdown(bodyNode, { comments })` projects a body element onto GFM markdown.
+// `fromMarkdown(text)` parses that subset back into a canonical-candidate HTML
+// fragment for `formatFragment()`, reporting anything it could not read as a
+// warning — never dropping the text.
+//
+// Decisions (and why):
+// - Anything markdown cannot express — an `id` on a heading, `ol[start]`, a cell
+//   `colspan`, a table without `<thead>`, `<u>`, … — is emitted as canonical raw
+//   HTML. GFM passes raw HTML through, and `fromMarkdown` hands vocabulary tags
+//   back unchanged, so those nodes survive instead of being guessed at. That is
+//   why `format.js` is imported here: the fallback *is* the canonical serializer.
+// - `<br>` prints as GFM's hard break (two trailing spaces), never literal `<br>`:
+//   one encoding per node, and the reader turns it back into `<br>`.
+// - List continuation uses the marker width (2 for `- `, 3 for `1. `) so GFM still
+//   nests them; for bullets that is the spec's "2 spaces per level".
+// - `section` is inlined and headings are never renumbered: markdown headings are
+//   already absolute (h1..h6 carry the level), so shifting a nested section would
+//   destroy the original level on the way back.
+// - Setext headings are not read. `---` is our `<hr>`, and "was this line an
+//   underline?" is exactly the ambiguity that keeps markdown parsers incompatible.
+// - `comments: 'html'` writes literal `<mark data-c>`/`<aside data-thread>` HTML.
+//   An HTML comment block would come back as an untyped comment node, losing the
+//   id/author/state; raw HTML re-parses to the same elements, so it survives.
+// - CriticMarkup has no slot for a change author, so `del[data-author]` prints as
+//   `{--x--}` only under `comments: 'critic'`; the html path keeps the author.
+// - A lone block-level `img` prints as a markdown image line and therefore reads
+//   back as `<p><img></p>` — markdown cannot tell an image from an image
+//   paragraph. Use `figure` when the distinction matters.
+// - A list item's leading paragraph goes out as bare text, not `<p>`: markdown
+//   cannot tell `<li>a<ul>…` from `<li><p>a</p><ul>…`, and the bare form is the
+//   idiomatic one, so reading it back always yields the bare form.
+// - Markdown tables always have a header row, so a table without a single-row
+//   `<thead>` (or with ragged rows, or `colspan`/`rowspan`/`scope`) goes out as
+//   raw HTML instead; that keeps `fromMarkdown(toMarkdown(x))` exact for tables.
+
+const {BLOCK, HEADINGS, VOCAB, VOID, isEl, textOf} = __mods["src/tree"];
+const {decodeEntities, escapeAttr, escapeText} = __mods["src/entities"];
+const {emitBlock, emitInline} = __mods["src/format"];
+// --------------------------------------------------------------- toMarkdown
+
+const NOTE_TO_ALERT = { info: 'NOTE', tip: 'TIP', warn: 'WARNING', danger: 'CAUTION' };
+const ALERT_TO_NOTE = { NOTE: 'info', TIP: 'tip', IMPORTANT: 'info', WARNING: 'warn', CAUTION: 'danger' };
+
+/** Markdown-escapable ASCII punctuation, plus `~`/`=` which start our `~~`/`==`. */
+const ESC = /[\\`*_\[\]<>~=]/g;
+const escMd = (s) => s.replace(ESC, '\\<script type="module" src="editor.js"></script>');
+/** Only `|` is special inside a table cell; text escaping already happened. */
+const escCell = (s) => s.replace(/\|/g, '\\|');
+
+const rawHtml = (node) => {
+  const out = [];
+  emitBlock(node, 0, out);
+  return out.join('\n');
+};
+const rawInline = (node) => emitInline(node);
+
+const attrsOf = (node) => node.attrs || {};
+const hasAttrs = (node) => Object.keys(attrsOf(node)).length > 0;
+const kidsOf = (node) => node.children || [];
+
+/** `[t](url "title")` needs a pointy destination for urls containing spaces/parens. */
+const dest = (url) => (/[\s()]/.test(url) ? `<${url}>` : url);
+
+function codeSpan(text) {
+  const runs = text.match(/`+/g) || [];
+  const fence = '`'.repeat(Math.max(0, ...runs.map((r) => r.length)) + 1);
+  const pad = text.startsWith('`') || text.endsWith('`') ? ' ' : '';
+  return `${fence}${pad}${text}${pad}${fence}`;
+}
+
+function inlineMd(nodes, ctx) {
+  const list = nodes || [];
+  return list.map((n, i) => (isEl(n, 'br') && (ctx.solidBr || !twoSpaceBreak(list, i)) ? '<br>' : nodeMd(n, ctx))).join('');
+}
+
+/** The two-space hard break needs a line of its own text on both sides. */
+function twoSpaceBreak(list, i) {
+  return i > 0 && i + 1 < list.length && !isEl(list[i + 1], 'br');
+}
+
+function nodeMd(node, ctx) {
+  if (node.type === 'text') return escMd(node.text);
+  if (node.type === 'comment') return `<!--${node.text}-->`;
+  const A = attrsOf(node);
+  const inline = () => inlineMd(kidsOf(node), ctx);
+  switch (node.name) {
+    case 'strong': return `**${inline()}**`;
+    case 'em': return `*${inline()}*`;
+    case 'code': return codeSpan(textOf(node));
+    case 's': return `~~${inline()}~~`;
+    case 'del':
+      if (ctx.comments === 'critic' && A['data-author']) return `{--${inline()}--}`;
+      return `~~${inline()}~~`;
+    case 'ins': return ctx.comments === 'critic' ? `{++${inline()}++}` : rawInline(node);
+    case 'mark':
+      if (!A['data-c']) return `==${inline()}==`;
+      if (ctx.comments === 'drop') return inline();
+      if (ctx.comments === 'critic') {
+        ctx.used.push(A['data-c']);
+        return `{==${inline()}==}`;
+      }
+      return rawInline(node);
+    case 'a': return linkMd(node, ctx);
+    case 'img': return imgMd(node);
+    case 'br': return ctx.solidBr ? '<br>' : '  \n';
+    default: return rawInline(node); // sub/sup/u/… — HTML is their markdown form
+  }
+}
+
+function linkMd(node, ctx) {
+  const { href, id, title, target, rel } = attrsOf(node);
+  if (!href || id || target || rel || /[<>]/.test(href)) return rawInline(node);
+  const text = inlineMd(kidsOf(node), ctx);
+  const t = title ? ` "${title.replace(/"/g, '\\"')}"` : '';
+  return `[${text}](${dest(href)}${t})`;
+}
+
+function imgMd(node) {
+  const { src = '', alt = '', id, width, height } = attrsOf(node);
+  if (id || width || height || /[<>]/.test(src)) return rawInline(node);
+  return `![${escMd(alt)}](${dest(src)})`;
+}
+
+/** Consecutive inline nodes become one paragraph; block elements stand alone. */
+function groupBlocks(children) {
+  const out = [];
+  let para = null;
+  for (const c of children || []) {
+    const plainP = isEl(c, 'p') && !hasAttrs(c) && !(c.children || []).some((k) => k.type === 'element' && BLOCK.has(k.name));
+    if (plainP) { para = null; out.push({ kind: 'para', children: kidsOf(c) }); continue; }
+    if (c.type === 'comment' || (c.type === 'element' && BLOCK.has(c.name))) {
+      para = null;
+      out.push({ kind: 'block', node: c });
+      continue;
+    }
+    if (!para) {
+      // Whitespace between two blocks (a parsed canonical file is full of it) is
+      // layout, not content; inside a paragraph it is significant and kept.
+      if (c.type === 'text' && !c.text.trim()) continue;
+      para = { kind: 'para', children: [] };
+      out.push(para);
+    }
+    para.children.push(c);
+  }
+  return out;
+}
+
+/** Paragraph markdown: block-edge whitespace is trimmed, like the canonical form. */
+function paraNodeMd(children, ctx) {
+  const list = [...(children || [])];
+  if (list.length && list[0].type === 'text') list[0] = { ...list[0], text: list[0].text.replace(/^\s+/, '') };
+  const last = list.length - 1;
+  if (last >= 0 && list[last].type === 'text') list[last] = { ...list[last], text: list[last].text.replace(/\s+$/, '') };
+  return inlineMd(list, ctx);
+}
+
+/** A paragraph must not start with characters that would re-parse as a block. */
+function paraMd(md) {
+  if (/^[#>+-]/.test(md)) return '\\' + md;
+  const d = /^(\d+)([.)])/.exec(md);
+  if (d) return `${d[1]}\\${md.slice(d[1].length)}`;
+  return md;
+}
+
+function fenceMd(node) {
+  const lang = attrsOf(node)['data-lang'] || '';
+  const text = textOf(node);
+  const runs = text.match(/`{3,}/g) || [];
+  const fence = '`'.repeat(Math.max(3, ...runs.map((r) => r.length + 1)));
+  const body = text.replace(/\n$/, '');
+  return `${fence}${lang}\n${body}\n${fence}`;
+}
+
+function listMd(node, ctx) {
+  const ordered = node.name === 'ol';
+  const out = [];
+  let n = 1;
+  for (const li of kidsOf(node).filter((c) => isEl(c, 'li'))) {
+    const checked = attrsOf(li)['data-checked'];
+    const box = checked === undefined ? '' : checked === 'true' ? '[x] ' : '[ ] ';
+    const marker = `${ordered ? `${n++}. ` : '- '}${box}`;
+    const pad = ' '.repeat(marker.length);
+    const groups = groupBlocks(kidsOf(li));
+    const lines = itemMd(ctx, groups).split('\n');
+    if (groups[0] && groups[0].kind === 'para') out.push(marker + lines.shift());
+    else out.push(marker.trimEnd());
+    for (const l of lines) out.push(l === '' ? '' : pad + l);
+  }
+  return out.join('\n');
+}
+
+function itemMd(ctx, groups) {
+  return groups.map((g) => (g.kind === 'para' ? paraMd(paraNodeMd(g.children, ctx)) : blockMd(g.node, ctx)))
+    .filter((s) => s !== null && s !== '')
+    .join('\n\n');
+}
+
+function quoteMd(md) {
+  return md.split('\n').map((l) => (l === '' ? '>' : `> ${l}`)).join('\n');
+}
+
+function tableMd(node, ctx) {
+  const thead = kidsOf(node).find((c) => isEl(c, 'thead'));
+  const tbody = kidsOf(node).find((c) => isEl(c, 'tbody'));
+  const headRows = thead ? kidsOf(thead).filter((c) => isEl(c, 'tr')) : [];
+  const bodyRows = (tbody ? kidsOf(tbody) : kidsOf(node)).filter((c) => isEl(c, 'tr'));
+  const all = [...headRows, ...bodyRows];
+  // A pipe table is a header row plus a delimiter row plus body rows: anything
+  // else (no `<thead>`, ragged rows, spanning cells) goes out as raw HTML.
+  const cells = all.flatMap((r) => kidsOf(r));
+  if (headRows.length !== 1 || cells.some((c) => attrsOf(c).colspan || attrsOf(c).rowspan || attrsOf(c).scope)) {
+    return rawHtml(node);
+  }
+  const width = kidsOf(headRows[0]).length;
+  if (all.some((r) => kidsOf(r).length !== width)) return rawHtml(node);
+  const align = (i) => {
+    const a = attrsOf(kidsOf(headRows[0])[i])['data-align'];
+    if (a) return a;
+    for (const r of bodyRows) {
+      const b = attrsOf(kidsOf(r)[i] || {})['data-align'];
+      if (b) return b;
+    }
+    return null;
+  };
+  // A table cell is one line, so a break inside it must be the `<br>` form.
+  const cellMd = (c) => {
+    const prev = ctx.solidBr;
+    ctx.solidBr = true;
+    const md = inlineMd(kidsOf(c), ctx);
+    ctx.solidBr = prev;
+    return md;
+  };
+  const line = (r) => `| ${kidsOf(r).map((c) => escCell(cellMd(c))).join(' | ')} |`;
+  const rule = Array.from({ length: width }, (_, i) => {
+    const a = align(i);
+    return a === 'center' ? ':--:' : a === 'right' ? '--:' : a === 'left' ? ':--' : '---';
+  }).join(' | ');
+  return [line(headRows[0]), `| ${rule} |`, ...bodyRows.map(line)].join('\n');
+}
+
+function figureMd(node, ctx) {
+  const img = kidsOf(node).find((c) => isEl(c, 'img'));
+  const cap = kidsOf(node).find((c) => isEl(c, 'figcaption'));
+  if (!img) return rawHtml(node);
+  let out = imgMd(img);
+  if (cap) {
+    const md = inlineMd(kidsOf(cap), ctx);
+    // `*caption*` is the figure form; an emphasised caption stays a plain
+    // paragraph so that reading `*…*` back cannot nest emphasis.
+    const plain = !kidsOf(cap).some((c) => c.type === 'element' && (c.name === 'em' || c.name === 'strong'));
+    out += `\n\n${plain ? `*${md}*` : md}`;
+  }
+  return out;
+}
+
+function asideMd(node, ctx) {
+  const note = attrsOf(node)['data-note'];
+  if (note && NOTE_TO_ALERT[note]) {
+    return quoteMd(`[!${NOTE_TO_ALERT[note]}]\n\n${sequenceMd(kidsOf(node), ctx)}`);
+  }
+  if (ctx.comments !== 'html') return null; // critic → anchored tail, drop → gone
+  return rawHtml(node);
+}
+
+function blockMd(node, ctx) {
+  if (node.type === 'text') return escMd(node.text);
+  if (node.type === 'comment') return `<!--${node.text}-->`;
+  const A = attrsOf(node);
+  if (HEADINGS.has(node.name)) {
+    if (hasAttrs(node)) return rawHtml(node);
+    return `${'#'.repeat(+node.name[1])} ${inlineMd(kidsOf(node), ctx)}`;
+  }
+  switch (node.name) {
+    case 'p': return hasAttrs(node) ? rawHtml(node) : paraMd(paraNodeMd(kidsOf(node), ctx));
+    case 'ul':
+    case 'ol': return hasAttrs(node) ? rawHtml(node) : listMd(node, ctx);
+    case 'blockquote': return quoteMd(sequenceMd(kidsOf(node), ctx));
+    case 'pre': return fenceMd(node);
+    case 'hr': return hasAttrs(node) ? rawHtml(node) : '---';
+    case 'table': return tableMd(node, ctx);
+    case 'figure': return figureMd(node, ctx);
+    case 'section': return hasAttrs(node) ? rawHtml(node) : sequenceMd(kidsOf(node), ctx);
+    case 'aside': return asideMd(node, ctx);
+    case 'img': return imgMd(node);
+    default: return rawHtml(node);
+  }
+}
+
+/** One markdown block per group, with critic comment threads right after their anchor. */
+function sequenceMd(children, ctx) {
+  const out = [];
+  for (const g of groupBlocks(children)) {
+    ctx.used = []; // comment anchors are collected per block
+    const md = g.kind === 'para' ? paraMd(paraNodeMd(g.children, ctx)) : blockMd(g.node, ctx);
+    if (md === null || md === '') continue;
+    out.push(md + criticTail(ctx));
+  }
+  return out.join('\n\n');
+}
+
+function criticTail(ctx) {
+  if (ctx.comments !== 'critic' || !ctx.used.length) return '';
+  const lines = [];
+  for (const id of new Set(ctx.used)) {
+    const aside = ctx.threads.get(id);
+    if (!aside || ctx.emitted.has(id)) continue;
+    ctx.emitted.add(id);
+    for (const p of kidsOf(aside).filter((c) => isEl(c, 'p'))) {
+      const author = attrsOf(p)['data-author'];
+      lines.push(`{>>${author ? `${author}: ` : ''}${inlineMd(kidsOf(p), ctx)}<<}`);
+    }
+  }
+  return lines.length ? '\n\n' + lines.join('\n') : '';
+}
+
+function resolveBody(node) {
+  if (!node) return { type: 'element', name: 'body', attrs: {}, children: [] };
+  if (isEl(node, 'body')) return node;
+  if (node.name === '#root' || isEl(node, 'html')) {
+    const queue = [...(node.children || [])];
+    while (queue.length) {
+      const c = queue.shift();
+      if (isEl(c, 'body')) return c;
+      if (isEl(c, 'html')) queue.push(...(c.children || []));
+    }
+  }
+  return node;
+}
+
+/**
+ * GFM markdown for a body element.
+ * `opts.comments`: `'html'` (default) | `'critic'` | `'drop'`.
+ * Blocks are separated by a blank line; the text ends with one newline (`''` for
+ * an empty body).
+ */
+function toMarkdown(bodyNode, opts = {}) {
+  const comments = opts.comments || 'html';
+  if (!['html', 'critic', 'drop'].includes(comments)) throw new Error(`unknown comments mode: ${comments}`);
+  const body = resolveBody(bodyNode);
+  const ctx = { comments, used: [], emitted: new Set(), threads: new Map() };
+  for (const n of walkAll(body)) {
+    if (isEl(n, 'aside') && attrsOf(n)['data-thread'] && !ctx.threads.has(attrsOf(n)['data-thread'])) {
+      ctx.threads.set(attrsOf(n)['data-thread'], n);
+    }
+  }
+  let md = sequenceMd(kidsOf(body), ctx);
+  if (comments === 'critic') {
+    for (const [id, aside] of ctx.threads) {
+      if (ctx.emitted.has(id)) continue;
+      for (const p of kidsOf(aside).filter((c) => isEl(c, 'p'))) {
+        const author = attrsOf(p)['data-author'];
+        md += `${md ? '\n\n' : ''}{>>${author ? `${author}: ` : ''}${inlineMd(kidsOf(p), ctx)}<<}`;
+      }
+    }
+  }
+  return md ? md + '\n' : '';
+}
+
+function* walkAll(node) {
+  yield node;
+  for (const c of node.children || []) yield* walkAll(c);
+}
+
+// -------------------------------------------------------------- markdown → HTML
+
+const RE_HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?[ \t]*#*[ \t]*$/;
+const RE_HR = /^ {0,3}(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$/;
+const RE_FENCE = /^ {0,3}(`{3,}|~{3,})[ \t]*(.*)$/;
+const RE_QUOTE = /^ {0,3}> ?(.*)$/;
+const RE_ITEM = /^( *)([-+*]|\d{1,9}[.)])( +|$)(.*)$/;
+const RE_ALERT = /^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*$/i;
+const RE_TAG = /^<(\/?)([a-zA-Z][\w-]*)((?:"[^"]*"|'[^']*'|[^>"'])*)>/;
+const RE_ESCAPABLE = /[!-\/:-@\[-`{-~]/;
+
+const indentOf = (l) => /^ */.exec(l)[0].length;
+const warn = (ctx, message) => { ctx.warnings.push(message); };
+
+function itemAt(line) {
+  const m = RE_ITEM.exec(line);
+  if (!m) return null;
+  const spaces = m[3].length;
+  const short = spaces >= 5; // 5+ spaces means "content starts after one space"
+  return {
+    indent: m[1].length,
+    marker: m[2],
+    ordered: /\d/.test(m[2][0]),
+    contentIndent: m[1].length + m[2].length + (short ? 1 : Math.max(1, spaces)),
+    rest: (short ? m[3].slice(1) : '') + m[4],
+  };
+}
+
+function rawBlockTag(line) {
+  if (/^ {0,3}<!--/.test(line)) return '!--';
+  const m = /^ {0,3}<([a-zA-Z][\w-]*)(?:[\s/>]|$)/.exec(line);
+  if (!m) return null;
+  const tag = m[1].toLowerCase();
+  return BLOCK.has(tag) ? tag : null;
+}
+
+function isBlockStart(line) {
+  return RE_HEADING.test(line) || RE_FENCE.test(line) || RE_HR.test(line) || RE_QUOTE.test(line)
+    || RE_ITEM.test(line) || rawBlockTag(line) !== null || /^ {4}/.test(line);
+}
+
+/** Net open-element depth of one line of a raw HTML block (we emit one tag per line). */
+function depthOf(line) {
+  let d = 0;
+  const re = /<(\/?)([a-zA-Z][\w-]*)((?:"[^"]*"|'[^']*'|[^>])*)>/g;
+  let m;
+  while ((m = re.exec(line))) {
+    if (m[3].endsWith('/')) continue;
+    if (m[1] === '/') d--;
+    else if (!VOID.has(m[2].toLowerCase())) d++;
+  }
+  return d;
+}
+
+function readRawLines(lines, i, tag, ctx) {
+  const start = i;
+  if (tag === '!--') {
+    while (i < lines.length && !lines[i].includes('-->')) i++;
+    if (i < lines.length) i++;
+    else warn(ctx, 'unterminated HTML comment');
+    return { html: lines.slice(start, i).join('\n'), i };
+  }
+  if (tag === 'pre') {
+    while (i < lines.length && !/<\/pre>/i.test(lines[i])) i++;
+    if (i < lines.length) i++;
+    else warn(ctx, 'unterminated <pre> block');
+    return { html: lines.slice(start, i).join('\n'), i };
+  }
+  let depth = 0;
+  let raw = false; // inside a nested `<pre>`: its content is not markup
+  do {
+    const line = lines[i];
+    if (raw) {
+      if (/<\/pre>/i.test(line)) { raw = false; depth--; }
+    } else {
+      const at = line.search(/<pre[\s>]/i);
+      if (at === -1) depth += depthOf(line);
+      else {
+        depth += depthOf(line.slice(0, at)) + 1;
+        if (/<\/pre>/i.test(line.slice(at))) depth--;
+        else raw = true;
+      }
+    }
+    i++;
+  } while (i < lines.length && (depth > 0 || raw));
+  if (depth > 0 || raw) warn(ctx, `unterminated <${tag}> block`);
+  return { html: lines.slice(start, i).join('\n'), i };
+}
+
+function readFence(lines, i, m, ctx) {
+  const char = m[1][0];
+  const len = m[1].length;
+  const info = m[2].trim();
+  const body = [];
+  i++;
+  let closed = false;
+  while (i < lines.length) {
+    const cm = /^ {0,3}(`{3,}|~{3,})\s*$/.exec(lines[i]);
+    if (cm && cm[1][0] === char && cm[1].length >= len) { i++; closed = true; break; }
+    body.push(lines[i]);
+    i++;
+  }
+  if (!closed) warn(ctx, 'unterminated fenced code block');
+  const lang = info.split(/[\s{]/)[0];
+  const attr = lang ? ` data-lang="${escapeAttr(lang)}"` : '';
+  return { html: `<pre${attr}>${escapeText(body.join('\n'))}</pre>`, i };
+}
+
+function readIndentedCode(lines, i) {
+  const body = [];
+  let pending = 0;
+  while (i < lines.length) {
+    if (!lines[i].trim()) { pending++; i++; continue; }
+    if (!/^ {4}/.test(lines[i])) break;
+    while (pending) { body.push(''); pending--; }
+    body.push(lines[i].slice(4));
+    i++;
+  }
+  return { html: `<pre>${escapeText(body.join('\n'))}</pre>`, i };
+}
+
+function readQuote(lines, i, ctx) {
+  const inner = [];
+  while (i < lines.length) {
+    const m = RE_QUOTE.exec(lines[i]);
+    if (m) { inner.push(m[1]); i++; continue; }
+    if (lines[i].trim() && !isBlockStart(lines[i])) { inner.push(lines[i].trim()); i++; continue; }
+    break;
+  }
+  const alert = RE_ALERT.exec(inner[0] || '');
+  if (alert) {
+    const note = ALERT_TO_NOTE[alert[1].toUpperCase()];
+    const body = parseBlocks(inner.slice(1), ctx);
+    return { html: body ? `<aside data-note="${note}">\n${body}\n</aside>` : `<aside data-note="${note}"></aside>`, i };
+  }
+  const body = parseBlocks(inner, ctx);
+  return { html: body ? `<blockquote>\n${body}\n</blockquote>` : '<blockquote></blockquote>', i };
+}
+
+function readList(lines, i, ctx) {
+  const first = itemAt(lines[i]);
+  const ordered = first.ordered;
+  const start = parseInt(first.marker, 10);
+  const items = [];
+  while (i < lines.length) {
+    const m = itemAt(lines[i]);
+    if (!m || m.ordered !== ordered) break;
+    let rest = m.rest;
+    let contentIndent = m.contentIndent;
+    let checked;
+    const box = /^\[([ xX])\](?: |$)/.exec(rest);
+    if (box) { checked = box[1] !== ' '; rest = rest.slice(box[0].length); contentIndent += box[0].length; }
+    const body = [rest];
+    i++;
+    while (i < lines.length) {
+      const l = lines[i];
+      if (!l.trim()) {
+        let j = i;
+        while (j < lines.length && !lines[j].trim()) j++;
+        if (j < lines.length && indentOf(lines[j]) >= contentIndent) {
+          while (i < j) { body.push(''); i++; }
+          continue;
+        }
+        i = j;
+        break;
+      }
+      if (indentOf(l) >= contentIndent) { body.push(l.slice(contentIndent)); i++; continue; }
+      if (!isBlockStart(l)) { body.push(l.trim()); i++; continue; } // lazy continuation
+      break;
+    }
+    items.push({ body, checked });
+  }
+  const tag = ordered ? 'ol' : 'ul';
+  const attr = ordered && start !== 1 ? ` start="${start}"` : '';
+  const html = items.map(({ body, checked }) => {
+    const inner = parseBlocks(body, ctx);
+    // A leading `<p>` in an item is written as bare text (that is how the
+    // canonical form of `<li>a<ul>…` looks); later blocks stay as blocks.
+    const lead = /^<p>((?:(?!<\/p>)[\s\S])*)<\/p>/.exec(inner);
+    const head = lead ? lead[1] : '';
+    const rest = lead ? inner.slice(lead[0].length) : inner;
+    const liAttr = checked === undefined ? '' : ` data-checked="${checked ? 'true' : 'false'}"`;
+    if (lead) return `<li${liAttr}>${head}${rest}</li>`;
+    return `<li${liAttr}>\n${inner}\n</li>`;
+  });
+  return { html: `<${tag}${attr}>\n${html.join('\n')}\n</${tag}>`, i };
+}
+
+function splitRow(line) {
+  let s = line.trim();
+  if (s.startsWith('|')) s = s.slice(1);
+  if (/(^|[^\\])\|$/.test(s)) s = s.slice(0, -1);
+  return s.split(/(?<!\\)\|/).map((c) => c.replace(/\\\|/g, '|').trim());
+}
+
+function delimAligns(line) {
+  let s = line.trim();
+  if (s.startsWith('|')) s = s.slice(1);
+  if (s.endsWith('|')) s = s.slice(0, -1);
+  const cells = s.split('|').map((c) => c.trim());
+  if (!cells.length || !cells.every((c) => /^:?-+:?$/.test(c))) return null;
+  return cells.map((c) => (c.startsWith(':') && c.endsWith(':') ? 'center'
+    : c.endsWith(':') ? 'right' : c.startsWith(':') ? 'left' : null));
+}
+
+function readTable(lines, i, aligns, ctx) {
+  const head = splitRow(lines[i]);
+  i += 2;
+  const rows = [];
+  while (i < lines.length && lines[i].trim() && lines[i].includes('|')) { rows.push(splitRow(lines[i])); i++; }
+  const pend = [];
+  const row = (cells, tag) => `<tr>${cells.map((c, k) => {
+    const a = aligns[k] || null;
+    return `<${tag}${a ? ` data-align="${a}"` : ''}>${inline(c, ctx, pend)}</${tag}>`;
+  }).join('')}</tr>`;
+  const body = rows.length ? `<tbody>\n${rows.map((r) => row(r, 'td')).join('\n')}\n</tbody>\n` : '';
+  return { html: finish(ctx, pend, `<table>\n<thead>\n${row(head, 'th')}\n</thead>\n${body}</table>`), i };
+}
+
+function readParagraph(lines, i, ctx) {
+  const buf = [lines[i]];
+  i++;
+  while (i < lines.length && lines[i].trim() && !isBlockStart(lines[i])) { buf.push(lines[i]); i++; }
+  let text = buf.join('\n');
+  // A `<br>` at the very end of a paragraph prints as two trailing spaces with no
+  // newline after them to detect it, so check the block's tail as well.
+  const tail = / {2,}$/.exec(text);
+  if (tail) text = text.slice(0, -tail[0].length) + '<br>';
+  const img = imageOnly(text);
+  if (img) {
+    let j = i;
+    while (j < lines.length && !lines[j].trim()) j++;
+    const cap = /^\*([^*]+)\*$/.exec((lines[j] || '').trim());
+    if (cap && (j + 1 >= lines.length || !lines[j + 1].trim())) {
+      return { html: `<figure>\n${inlineBlock(text, ctx)}\n<figcaption>${inlineBlock(cap[1], ctx)}</figcaption>\n</figure>`, i: j + 1 };
+    }
+  }
+  const html = inlineBlock(text, ctx);
+  // A paragraph that was nothing but `{>>…<<}` is comment, not text: the aside
+  // takes its place instead of being tucked inside an empty `<p>`.
+  const cut = html.indexOf('\n<aside data-thread="');
+  if (cut === 0) return { html: html.slice(1), i };
+  if (html === '') return { html, i };
+  if (cut === -1) return { html: `<p>${html}</p>`, i };
+  return { html: `<p>${html.slice(0, cut)}</p>\n${html.slice(cut + 1)}`, i };
+}
+
+/** Is this paragraph exactly one `![…](…)`? (The figure form.) */
+function imageOnly(text) {
+  const m = /^!\[((?:[^\]\\]|\\.)*)\]\(/.exec(text);
+  if (!m) return false;
+  const d = readDest(text, m[0].length - 1);
+  return !!d && d.i === text.length;
+}
+
+function parseBlocks(lines, ctx) {
+  const out = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (!line.trim()) { i++; continue; }
+    let m;
+    if (/^ {4}/.test(line)) { const r = readIndentedCode(lines, i); out.push(r.html); i = r.i; continue; }
+    if ((m = RE_FENCE.exec(line))) { const r = readFence(lines, i, m, ctx); out.push(r.html); i = r.i; continue; }
+    if (RE_HR.test(line)) { out.push('<hr>'); i++; continue; }
+    if ((m = RE_HEADING.exec(line))) { out.push(`<h${m[1].length}>${inlineBlock(m[2] || '', ctx)}</h${m[1].length}>`); i++; continue; }
+    if (RE_QUOTE.test(line)) { const r = readQuote(lines, i, ctx); out.push(r.html); i = r.i; continue; }
+    if (itemAt(line)) { const r = readList(lines, i, ctx); out.push(r.html); i = r.i; continue; }
+    // GFM wants the delimiter row to have exactly the header's cell count.
+    const aligns = lines[i + 1] !== undefined && line.includes('|') ? delimAligns(lines[i + 1]) : null;
+    if (aligns && splitRow(line).length === aligns.length) { const r = readTable(lines, i, aligns, ctx); out.push(r.html); i = r.i; continue; }
+    const tag = rawBlockTag(line);
+    if (tag && tag !== '!--' && VOCAB.has(tag)) { const r = readRawLines(lines, i, tag, ctx); out.push(r.html); i = r.i; continue; }
+    if (tag === '!--') { const r = readRawLines(lines, i, tag, ctx); out.push(r.html); i = r.i; continue; }
+    const r = readParagraph(lines, i, ctx);
+    out.push(r.html);
+    i = r.i;
+  }
+  return out.join('\n');
+}
+
+// ------------------------------------------------------------------- inline
+
+function readDest(src, i) {
+  if (src[i] !== '(') return null;
+  let j = i + 1;
+  while (src[j] === ' ' || src[j] === '\n') j++;
+  let url;
+  if (src[j] === '<') {
+    const end = src.indexOf('>', j + 1);
+    if (end === -1) return null;
+    url = src.slice(j + 1, end);
+    j = end + 1;
+  } else {
+    let depth = 0;
+    const start = j;
+    while (j < src.length && (depth > 0 || src[j] !== ')')) {
+      if (src[j] === '\\') j++;
+      else if (src[j] === '(') depth++;
+      else if (src[j] === ')') depth--;
+      j++;
+    }
+    if (j >= src.length) return null;
+    url = src.slice(start, j);
+  }
+  const rest = src.slice(j);
+  const t = /^[ \t\n]*"((?:[^"\\]|\\.)*)"[ \t\n]*\)/.exec(rest);
+  const after = /^[ \t\n]*\)/.exec(rest);
+  if (t) return { url, title: t[1].replace(/\\(.)/g, '$1'), i: j + t[0].length };
+  if (after) return { url, title: '', i: j + after[0].length };
+  return null;
+}
+
+function matchBracket(src, i) {
+  let depth = 0;
+  for (let j = i; j < src.length; j++) {
+    if (src[j] === '\\') { j++; continue; }
+    if (src[j] === '[') depth++;
+    else if (src[j] === ']') { depth--; if (depth === 0) return j; }
+  }
+  return -1;
+}
+
+function readCodeSpan(src, i) {
+  const m = /^(`+)([\s\S]*?)\1(?!`)/.exec(src.slice(i));
+  if (!m) return null;
+  let content = m[2].replace(/\n/g, ' ');
+  if (content.length > 2 && content.startsWith(' ') && content.endsWith(' ')) content = content.slice(1, -1);
+  return { html: `<code>${escapeText(decodeEntities(content))}</code>`, i: i + m[0].length };
+}
+
+function readAngle(src, i, ctx) {
+  const rest = src.slice(i);
+  if (rest.startsWith('<!--')) {
+    const end = rest.indexOf('-->');
+    if (end === -1) { warn(ctx, 'unterminated HTML comment'); return { html: escapeText(rest), i: src.length }; }
+    return { html: rest.slice(0, end + 3), i: i + end + 3 };
+  }
+  let m = /^<([a-zA-Z][a-zA-Z0-9+.-]{1,31}:[^<>\s]*)>/.exec(rest);
+  if (m) return { html: `<a href="${escapeAttr(m[1])}">${escapeText(m[1])}</a>`, i: i + m[0].length };
+  m = /^<([^\s<>@]+@[^\s<>@]+\.[^\s<>@]+)>/.exec(rest);
+  if (m) return { html: `<a href="mailto:${escapeAttr(m[1])}">${escapeText(m[1])}</a>`, i: i + m[0].length };
+  m = RE_TAG.exec(rest);
+  if (m) {
+    const tag = m[2].toLowerCase();
+    if (VOCAB.has(tag)) return { html: m[0], i: i + m[0].length };
+    warn(ctx, `unsupported HTML <${tag}> escaped as text`);
+    return { html: escapeText(m[0]), i: i + m[0].length };
+  }
+  return null;
+}
+
+function readImage(src, i) {
+  const close = matchBracket(src, i + 1);
+  if (close === -1) return null;
+  const alt = src.slice(i + 2, close).replace(/\\(.)/g, '$1');
+  const d = readDest(src, close + 1);
+  if (!d) return null;
+  return { html: `<img alt="${escapeAttr(decodeEntities(alt))}" src="${escapeAttr(d.url)}">`, i: d.i };
+}
+
+function readLink(src, i, ctx, pend) {
+  const close = matchBracket(src, i);
+  if (close === -1) return null;
+  const text = src.slice(i + 1, close);
+  const d = readDest(src, close + 1);
+  if (d) {
+    const t = d.title ? ` title="${escapeAttr(d.title)}"` : '';
+    return { html: `<a href="${escapeAttr(d.url)}"${t}>${inline(text, ctx, pend)}</a>`, i: d.i };
+  }
+  if (src[close + 1] === '[') {
+    const end = src.indexOf(']', close + 2);
+    warn(ctx, 'reference links are unsupported; kept as text');
+    return { html: escapeText(src.slice(i, (end === -1 ? close : end) + 1)), i: (end === -1 ? close : end) + 1 };
+  }
+  return null;
+}
+
+function inline(src, ctx, pend) {
+  let out = '';
+  let run = '';
+  let i = 0;
+  const flush = () => { if (run) { out += escapeText(decodeEntities(run)); run = ''; } };
+  const wrap = (tag, content) => {
+    flush();
+    out += `<${tag}>${inline(content, ctx, pend)}</${tag}>`;
+  };
+  const delim = (open, close, tag) => {
+    const end = src.indexOf(close, i + open.length);
+    if (end <= i + open.length) return false;
+    const inner = src.slice(i + open.length, end);
+    if (/^\s/.test(inner) || /\s$/.test(inner)) return false; // `* x*` is not emphasis
+    wrap(tag, inner);
+    i = end + close.length;
+    return true;
+  };
+  while (i < src.length) {
+    const c = src[i];
+    if (c === '\\' && RE_ESCAPABLE.test(src[i + 1] || '')) { flush(); out += escapeText(src[i + 1]); i += 2; continue; }
+    if (c === '\n') {
+      flush();
+      let k = i;
+      while (k > 0 && src[k - 1] === '\\') k--;
+      const slashes = i - k;
+      const spaces = (/( +)$/.exec(src.slice(0, i - slashes)) || ['', ''])[1].length;
+      if (slashes % 2 === 1) { out = out.replace(/\\$/, '') + '<br>'; }
+      else if (spaces >= 2) { out = out.replace(/ +$/, '') + '<br>'; }
+      else out += ' ';
+      i++;
+      continue;
+    }
+    if (c === '`') { const r = readCodeSpan(src, i); if (r) { flush(); out += r.html; i = r.i; continue; } }
+    if (c === '<') { const r = readAngle(src, i, ctx); if (r) { flush(); out += r.html; i = r.i; continue; } }
+    if (c === '!' && src[i + 1] === '[') { const r = readImage(src, i); if (r) { flush(); out += r.html; i = r.i; continue; } }
+    if (c === '[') { const r = readLink(src, i, ctx, pend); if (r) { flush(); out += r.html; i = r.i; continue; } }
+    if (c === '*' || c === '_') {
+      const wordBefore = /[A-Za-z0-9]/.test(src[i - 1] || '');
+      if (src[i + 1] === c && !(c === '_' && wordBefore)) { if (delim(c + c, c + c, 'strong')) continue; }
+      if (c === '*' || !wordBefore) { if (delim(c, c, 'em')) continue; }
+    }
+    if (src.startsWith('~~', i) && delim('~~', '~~', 'del')) continue;
+    if (src.startsWith('==', i) && delim('==', '==', 'mark')) continue;
+    if (src.startsWith('{++', i) && delim('{++', '++}', 'ins')) continue;
+    if (src.startsWith('{--', i) && delim('{--', '--}', 'del')) continue;
+    if (src.startsWith('{==', i)) {
+      const end = src.indexOf('==}', i + 3);
+      if (end !== -1) {
+        flush();
+        // The id is only known once the block ends (a `{==x==}` without a thread
+        // is a plain highlight), so the mark carries a NUL slot — a value no real
+        // document can contain — until `finish` replaces it.
+        const slot = `\u0000${++ctx.slots}`;
+        pend.push({ id: null, slot, threads: [], marked: true });
+        out += `<mark data-c="${slot}">${inline(src.slice(i + 3, end), ctx, pend)}</mark>`;
+        i = end + 3;
+        continue;
+      }
+    }
+    if (src.startsWith('{>>', i)) {
+      const end = src.indexOf('<<}', i + 3);
+      if (end !== -1) {
+        flush();
+        let body = src.slice(i + 3, end);
+        let author = '';
+        const sep = body.indexOf(': ');
+        if (sep !== -1) { author = body.slice(0, sep).trim(); body = body.slice(sep + 2); }
+        if (!pend.length) pend.push({ id: null, slot: null, threads: [], marked: false });
+        const entry = pend[pend.length - 1];
+        entry.threads.push({ author, html: inline(body, ctx, pend) });
+        i = end + 3;
+        continue;
+      }
+    }
+    run += c;
+    i++;
+  }
+  flush();
+  return out;
+}
+
+/** Inline content of one block, with any comment threads emitted right after it. */
+function inlineBlock(src, ctx) {
+  const pend = [];
+  return finish(ctx, pend, inline(src, ctx, pend));
+}
+
+/** Hand out comment ids and turn `{==…==}`/`{>>…<<}` pairs into anchors + asides. */
+function finish(ctx, pend, html) {
+  const asides = [];
+  for (const e of pend) {
+    if (!e.threads.length) {
+      // `==x==` with no thread is a plain highlight: drop the id, or `lint` would
+      // report a `mark data-c` that has no `<aside data-thread>`.
+      if (e.marked) html = html.replace(` data-c="${e.slot}"`, '');
+      continue;
+    }
+    e.id = `c${++ctx.idCount}`;
+    if (e.marked) html = html.replace(` data-c="${e.slot}"`, ` data-c="${e.id}"`);
+    const ps = e.threads.map((t) => `<p${t.author ? ` data-author="${escapeAttr(t.author)}"` : ''}>${t.html}</p>`);
+    asides.push(`<aside data-thread="${e.id}">\n${ps.join('\n')}\n</aside>`);
+  }
+  return asides.length ? `${html}\n${asides.join('\n')}` : html;
+}
+
+/**
+ * Parse the markdown subset (SPEC §8) into a canonical-candidate HTML fragment.
+ * Warnings name unsupported constructs once each, and never mean lost text: the
+ * construct is kept as escaped text or as a paragraph.
+ * @returns {{html: string, warnings: string[]}}
+ */
+function fromMarkdown(text) {
+  const ctx = { warnings: [], idCount: 0, slots: 0 };
+  const lines = String(text ?? '').replace(/\r\n?/g, '\n').split('\n');
+  return { html: parseBlocks(lines, ctx), warnings: [...new Set(ctx.warnings)] };
+}
+
+__mods["src/markdown"] = {toMarkdown, fromMarkdown};
+})();
+
+await (async function () {
+// Comments and tracked changes over the parse tree (docs/SPEC.md §5).
+// Every function mutates the tree in place and returns plain data.
+//
+// `tree` is the document root from `parse()` (the `#root` pseudo-element), so id
+// scans and `pathOf` see the whole document; `body` (addComment only) is the
+// element the comment *selector* is resolved against.
+//
+// ponytail: a quote must sit inside a single text node — matching does not span
+// inline markup; upgrade when someone quotes across `<strong>` boundaries.
+
+const {descendants, el, hasBlockChild, isEl, pathOf, textOf, txt, walk} = __mods["src/tree"];
+const {query, queryAll} = __mods["src/select"];
+const has = (obj, key) => Object.prototype.hasOwnProperty.call(obj || {}, key);
+
+function parentsOf(root) {
+  const map = new Map();
+  walk(root, (node) => {
+    for (const child of node.children || []) map.set(child, node);
+  });
+  return map;
+}
+
+/** Smallest `c<n>` not used by any `data-c` or `data-thread` in the document. */
+function newId(tree) {
+  const used = new Set();
+  walk(tree, (node) => {
+    if (!isEl(node)) return;
+    if (has(node.attrs, 'data-c')) used.add(node.attrs['data-c']);
+    if (has(node.attrs, 'data-thread')) used.add(node.attrs['data-thread']);
+  });
+  for (let n = 1; ; n++) if (!used.has(`c${n}`)) return `c${n}`;
+}
+
+function findThread(tree, id) {
+  for (const node of descendants(tree)) {
+    if (isEl(node, 'aside') && node.attrs['data-thread'] === id) return node;
+  }
+  return null;
+}
+
+function findMark(tree, id) {
+  for (const node of descendants(tree)) {
+    if (isEl(node, 'mark') && node.attrs['data-c'] === id) return node;
+  }
+  return null;
+}
+
+function replyP(text, author, at) {
+  const attrs = {};
+  if (author !== undefined) attrs['data-author'] = author;
+  if (at !== undefined) attrs['data-at'] = at;
+  return el('p', attrs, [txt(text === undefined ? '' : String(text))]);
+}
+
+/** First text node under `node` that contains `quote`, with its parent. */
+function findTextHolder(node, quote) {
+  for (const child of node.children || []) {
+    if (child.type === 'text') {
+      if (child.text.includes(quote)) return { parent: node, node: child };
+    } else if (child.children) {
+      const hit = findTextHolder(child, quote);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
+/** Wrap exactly `quote` inside the block, splitting its text node in three. */
+function wrapQuote(block, quote, id) {
+  const holder = findTextHolder(block, quote);
+  if (!holder) return null;
+  const { parent, node } = holder;
+  const at = node.text.indexOf(quote);
+  const mark = el('mark', { 'data-c': id }, [txt(quote)]);
+  const replacement = [];
+  const before = node.text.slice(0, at);
+  const after = node.text.slice(at + quote.length);
+  if (before) replacement.push(txt(before));
+  replacement.push(mark);
+  if (after) replacement.push(txt(after));
+  parent.children.splice(parent.children.indexOf(node), 1, ...replacement);
+  return mark;
+}
+
+/** Where the thread goes: after the block, or after its enclosing section/aside. */
+function threadSlot(block, parents) {
+  let node = block;
+  let parent = parents.get(node);
+  while (parent && (isEl(parent, 'section') || isEl(parent, 'aside'))) {
+    node = parent;
+    parent = parents.get(node);
+  }
+  if (!parent || !parent.children) {
+    throw new Error('cannot place comment thread: selected block has no parent');
+  }
+  return { parent, node };
+}
+
+/**
+ * Anchor a comment to the element matched by `selector` within `body`, then
+ * insert its thread `<aside>` right after the block (never inside a
+ * section/aside). With `quote`, only that substring is wrapped; without it, all
+ * inline children of the block are wrapped.
+ * Returns `{ id, anchor, threadPath }` — `anchor` is the `<mark data-c>` element.
+ */
+function addComment(tree, { body, selector, quote, text, author, at } = {}) {
+  if (!body || !selector) throw new Error('addComment needs { body, selector }');
+  const parents = parentsOf(tree);
+  const found = query(body, selector);
+  if (!found || !isEl(found.node)) throw new Error(`selector matched no element: ${selector}`);
+  const block = found.node;
+  for (let node = block; node; node = parents.get(node)) {
+    if (isEl(node, 'head')) throw new Error(`cannot anchor a comment inside <head>: ${selector}`);
+  }
+  const id = newId(tree);
+  let mark;
+  if (quote) {
+    mark = wrapQuote(block, quote, id);
+    if (!mark) throw new Error(`quote not found in the block matched by "${selector}": ${quote}`);
+  } else if (hasBlockChild(block.children)) {
+    // An inline <mark> cannot legally wrap block children (a <ul>, a table, a
+    // section), so a note on a container block is anchored to the container
+    // itself: thread only, no mark.
+    mark = null;
+  } else {
+    mark = el('mark', { 'data-c': id }, block.children || []);
+    block.children = [mark];
+  }
+  const { parent: slotParent, node: slotNode } = threadSlot(block, parents);
+  const thread = el('aside', { 'data-thread': id, 'data-state': 'open' }, [replyP(text, author, at)]);
+  slotParent.children.splice(slotParent.children.indexOf(slotNode) + 1, 0, thread);
+  return { id, anchor: mark, threadPath: pathOf(tree, thread) };
+}
+
+/** Every `<aside data-thread>` in document order. `data-state` missing = `open`. */
+function listComments(tree) {
+  const out = [];
+  walk(tree, (node) => {
+    if (!isEl(node, 'aside') || !has(node.attrs, 'data-thread')) return;
+    const id = node.attrs['data-thread'];
+    const paragraphs = (node.children || []).filter((c) => isEl(c, 'p'));
+    const first = paragraphs[0];
+    const mark = findMark(tree, id);
+    out.push({
+      id,
+      state: node.attrs['data-state'] || 'open',
+      author: first ? first.attrs['data-author'] : undefined,
+      at: first ? first.attrs['data-at'] : undefined,
+      text: first ? textOf(first) : '',
+      anchorText: mark ? textOf(mark) : '',
+      path: pathOf(tree, node),
+      replies: paragraphs.slice(1).map((p) => ({
+        author: p.attrs['data-author'],
+        at: p.attrs['data-at'],
+        text: textOf(p),
+      })),
+    });
+  });
+  return out;
+}
+
+/** `resolveComment(tree, id, false)` reopens. Returns the thread `<aside>`. */
+function resolveComment(tree, id, resolved = true) {
+  const thread = findThread(tree, id);
+  if (!thread) throw new Error(`no comment thread ${id}`);
+  thread.attrs['data-state'] = resolved ? 'resolved' : 'open';
+  return thread;
+}
+
+/** Append a reply `<p data-author data-at>`; returns that `<p>`. */
+function replyToComment(tree, id, { text, author, at } = {}) {
+  const thread = findThread(tree, id);
+  if (!thread) throw new Error(`no comment thread ${id}`);
+  const reply = replyP(text, author, at);
+  thread.children.push(reply);
+  return reply;
+}
+
+/** Drop every `<mark data-c=id>` (unwrapping its children) and the thread. */
+function removeComment(tree, id) {
+  const parents = parentsOf(tree);
+  const marks = [];
+  const threads = [];
+  walk(tree, (node) => {
+    if (isEl(node, 'mark') && node.attrs['data-c'] === id) marks.push(node);
+    else if (isEl(node, 'aside') && node.attrs['data-thread'] === id) threads.push(node);
+  });
+  for (const mark of marks) {
+    const parent = parents.get(mark);
+    if (!parent || !parent.children) continue;
+    parent.children.splice(parent.children.indexOf(mark), 1, ...(mark.children || []));
+  }
+  for (const thread of threads) {
+    const parent = parents.get(thread);
+    if (parent && parent.children) parent.children.splice(parent.children.indexOf(thread), 1);
+  }
+  return { marks: marks.length, threads: threads.length };
+}
+
+/** Depth-first rebuild: `fn(element) -> children[]` unwraps, `[]` deletes, `null` keeps. */
+function sweep(node, fn) {
+  if (!node.children) return;
+  const out = [];
+  for (const child of node.children) {
+    sweep(child, fn);
+    const replacement = fn(child);
+    if (replacement) out.push(...replacement);
+    else out.push(child);
+  }
+  node.children = out;
+}
+
+/** The nodes inside each element matched by `selector` (the whole tree if omitted). */
+function scopeOf(tree, selector) {
+  if (!selector) return null;
+  const scope = new Set();
+  for (const found of queryAll(tree, selector)) {
+    if (!isEl(found.node)) continue;
+    scope.add(found.node);
+    for (const node of descendants(found.node)) scope.add(node);
+  }
+  return scope;
+}
+
+/**
+ * Accepting a change means **the deletion stands and the insertion stands**: the
+ * `<ins>` text stays (element unwrapped) and the `<del>` text is gone (element
+ * and subtree removed). That asymmetry is deliberate — `rejectChanges` is the
+ * inverse. Returns `{ ins, del }` counts.
+ */
+function acceptChanges(tree, selector) {
+  return fold(tree, selector, 'ins', 'del');
+}
+
+/**
+ * Rejecting a change undoes it: the `<ins>` text is gone, and the `<del>` is
+ * dropped as an element so its text comes back. Returns `{ ins, del }` counts.
+ */
+function rejectChanges(tree, selector) {
+  return fold(tree, selector, 'del', 'ins');
+}
+
+/** `keep` is unwrapped (its text survives), `gone` is removed with its subtree. */
+function fold(tree, selector, keep, gone) {
+  const scope = scopeOf(tree, selector);
+  const counts = { [keep]: 0, [gone]: 0 };
+  sweep(tree, (node) => {
+    if (!isEl(node)) return null;
+    if (node.name !== keep && node.name !== gone) return null;
+    if (scope && !scope.has(node)) return null;
+    counts[node.name]++;
+    return node.name === keep ? node.children || [] : [];
+  });
+  return counts;
+}
+
+__mods["src/comments"] = {newId, addComment, listComments, resolveComment, replyToComment, removeComment, acceptChanges, rejectChanges};
+})();
+
+await (async function () {
+// WYSIWYG editor for a Neodoc file (docs/SPEC.md §4).
+//
+// The design in one sentence: the live <body> IS the document. Its children are
+// the document's blocks, typing mutates them directly, and Save canonicalizes the
+// live tree with format() from src/format.js — the same function `neodoc fmt`
+// runs, so the browser and the CLI cannot produce different bytes. There is no
+// model to sync, no preview pane and no re-render per keystroke.
+//
+// Browser HTML never reaches disk: every write goes through format() first, and
+// format() drops anything outside the closed vocabulary (docs/SPEC.md §3).
+//
+// The one editor-owned node in <body> is #chrome (toolbar/sidebar/status bar);
+// together with the editor stylesheet link it is detached for the duration of
+// canonicalText(), and restored immediately after. document.execCommand is never
+// used anywhere: it is deprecated and produces per-browser HTML that would
+// corrupt the file.
+
+const {format, formatFragment, serialize} = __mods["src/format"];
+const {parse} = __mods["src/parse"];
+const {RENAMES, VOCAB, isAttrAllowed} = __mods["src/tree"];
+const {query} = __mods["src/select"];
+const {fromMarkdown} = __mods["src/markdown"];
+const {addComment, listComments, resolveComment, replyToComment, acceptChanges, rejectChanges,} = __mods["src/comments"];
+const AUTHOR = 'editor';
+const now = () => new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+
+const CHROME = document.getElementById('chrome');
+const CSS_LINK = document.getElementById('editor-css');
+const $ = (sel) => document.querySelector(sel);
+
+// Elements a caret can live in (the "block" in the status bar and in commands).
+const LEAF = new Set(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'li', 'td', 'th', 'figcaption', 'pre']);
+const CONTAINER = new Set(['ul', 'ol', 'blockquote', 'section', 'aside', 'figure', 'table',
+  'thead', 'tbody', 'tr', 'li', 'td', 'th', 'figcaption']);
+// Dropped outright from pasted content; everything else outside the vocabulary is
+// unwrapped (kept as its children) so a paste can never inject behaviour.
+const PASTE_DROP = new Set(['script', 'style', 'iframe', 'object', 'embed', 'form', 'input',
+  'button', 'video', 'audio', 'svg', 'link', 'base', 'meta', 'title', 'head', 'body', 'html', 'template']);
+
+const state = { name: 'untitled.nd.html', mode: 'inline', dirty: false, served: false, handle: null, suggest: false, embed: true };
+
+// ------------------------------------------------------------------ dom helpers
+
+function h(name, attrs = {}, ...kids) {
+  const n = document.createElement(name);
+  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+  for (const k of kids) n.append(k);
+  return n;
+}
+const text = (s) => document.createTextNode(s);
+
+function setCaret(node, offset = 0) {
+  const r = document.createRange();
+  r.setStart(node, offset);
+  r.collapse(true);
+  focusRange(r);
+}
+function setCaretAfter(node) {
+  const r = document.createRange();
+  r.setStartAfter(node);
+  r.collapse(true);
+  focusRange(r);
+}
+function selectContents(node) {
+  const r = document.createRange();
+  r.selectNodeContents(node);
+  focusRange(r);
+}
+function focusRange(r) {
+  const sel = document.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(r);
+}
+function caretRange() {
+  const sel = document.getSelection();
+  return sel && sel.rangeCount ? sel.getRangeAt(0) : null;
+}
+
+/** Nearest leaf block around a node, or null when the caret is between blocks. */
+function blockOf(node) {
+  let n = node && node.nodeType === 3 ? node.parentNode : node;
+  while (n && n !== document.body && n.nodeType === 1) {
+    const p = n.parentNode;
+    if (p === document.body || (p && CONTAINER.has(p.nodeName.toLowerCase()))) {
+      return LEAF.has(n.nodeName.toLowerCase()) ? n : null;
+    }
+    n = p;
+  }
+  return null;
+}
+/** Caret at the very start of its block? */
+function atBlockStart(range, block) {
+  const r = document.createRange();
+  r.setStart(block, 0);
+  r.setEnd(range.startContainer, range.startOffset);
+  return r.toString() === '';
+}
+function blocksInBody() {
+  return [...document.body.children].filter((n) => n !== CHROME);
+}
+function treeToDom(node) {
+  if (!node) return null;
+  if (node.type === 'text') return text(node.text);
+  if (node.type === 'comment') return document.createComment(node.text);
+  if (node.type === 'doctype') return null;
+  const n = document.createElement(node.name);
+  for (const [k, v] of Object.entries(node.attrs || {})) n.setAttribute(k, v);
+  for (const c of (node.children || []).map(treeToDom)) if (c) n.append(c);
+  return n;
+}
+function* textNodesIn(el) {
+  const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  while (w.nextNode()) yield w.currentNode;
+}
+
+function status(message) {
+  $('#st-state').textContent = message;
+}
+
+// ------------------------------------------------------- canonicalization / IO
+
+function headOf(root) {
+  const html = (root.children || []).find((c) => c.type === 'element' && c.name === 'html');
+  return html ? (html.children || []).find((c) => c.name === 'head') : null;
+}
+const modeOfText = (src) => {
+  const head = headOf(parse(src).root);
+  return head && head.children.some((c) => c.name === 'style') ? 'inline' : 'none';
+};
+
+/**
+ * The live document as canonical text. #chrome, the editor stylesheet and the
+ * editing attributes are pulled out of the tree for the duration of format() so
+ * `document.documentElement.outerHTML` is exactly the document, nothing else.
+ */
+function canonicalText() {
+  const assets = [...document.head.children].filter((n) => n === CSS_LINK);
+  const attrs = ['contenteditable', 'spellcheck'];
+  const body = document.body;
+  const saved = attrs.map((a) => body.getAttribute(a));
+  CHROME.remove();
+  for (const n of assets) n.remove();
+  for (const a of attrs) body.removeAttribute(a);
+  let html;
+  try {
+    html = '<!doctype html>\n' + document.documentElement.outerHTML;
+  } finally {
+    attrs.forEach((a, i) => { if (saved[i] !== null) body.setAttribute(a, saved[i]); });
+    for (const n of assets) document.head.append(n);
+    body.append(CHROME);
+  }
+  return format(html, { style: state.mode });
+}
+
+/** Show canonical text: the document's head and body replace the live ones. */
+function applyDocument(src) {
+  const { root } = parse(src);
+  const html = (root.children || []).find((c) => c.type === 'element' && c.name === 'html');
+  const head = html && (html.children || []).find((c) => c.name === 'head');
+  const body = html && (html.children || []).find((c) => c.name === 'body');
+  state.mode = head && head.children.some((c) => c.name === 'style') ? 'inline' : 'none';
+  for (const n of [...document.head.children]) if (n !== CSS_LINK) n.remove();
+  document.head.append(...(head ? head.children.map(treeToDom).filter(Boolean) : []), CSS_LINK);
+  for (const a of [...document.documentElement.attributes]) {
+    if (!(a.name in ((html && html.attrs) || {}))) document.documentElement.removeAttribute(a.name);
+  }
+  for (const [k, v] of Object.entries((html && html.attrs) || {})) document.documentElement.setAttribute(k, v);
+  for (const n of [...document.body.childNodes]) if (n !== CHROME) n.remove();
+  const kids = body ? body.children.map(treeToDom).filter(Boolean) : [];
+  document.body.prepend(...(kids.length ? kids : [h('p')]));
+  document.body.append(CHROME);
+  bumpDom();
+  refresh();
+}
+
+/**
+ * Drop every editor-owned node that is not the document: the module <script>, the
+ * comments index.html is written with, and the whitespace text nodes around them.
+ * The HTML parser moves an `</head>`-time comment INTO the body, and format() keeps
+ * comments, so anything left here would be written into the user's file. Runs once,
+ * at boot, while the only document content is the empty <p>.
+ */
+function sweepEditorNodes() {
+  for (const n of [...document.documentElement.childNodes]) {
+    if (n !== document.head && n !== document.body) n.remove();
+  }
+  for (const n of [...document.body.childNodes]) {
+    if (n === CHROME) continue;
+    if (n.nodeType !== 1) n.remove();
+    else if (n.nodeName === 'SCRIPT' || n.nodeName === 'STYLE' || n.nodeName === 'LINK') n.remove();
+  }
+}
+
+/** Mutate the document tree and show the result. `fn(tree)` gets the #root. */
+function mutate(fn) {
+  const { text: src } = canonicalText();
+  const tree = parse(src).root;
+  const result = fn(tree);
+  applyDocument(serialize(tree));
+  state.dirty = true;
+  refresh();
+  return result;
+}
+
+async function openText(name, src, handle = null) {
+  const { text: canonical, warnings } = format(src, { style: modeOfText(src) });
+  state.name = name || state.name;
+  state.handle = handle;
+  state.dirty = false;
+  applyDocument(canonical);
+  const note = canonical === src ? 'already canonical' : 'rewritten to canonical form';
+  status(`opened ${state.name} (${note}, ${warnings.length} warning(s))`);
+  if (warnings.length) console.info('neodoc: format warnings', warnings);
+}
+
+async function loadServed() {
+  try {
+    const res = await fetch('/doc');
+    if (!res.ok) return false;
+    const doc = await res.json();
+    state.served = true;
+    state.mode = doc.mode === 'none' ? 'none' : 'inline';
+    await openText(doc.name, doc.text);
+    return true;
+  } catch { return false; }
+}
+
+function download(src) {
+  const url = URL.createObjectURL(new Blob([src], { type: 'text/html;charset=utf-8' }));
+  const a = h('a', { href: url, download: state.name });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+async function save() {
+  const { text: src, warnings } = canonicalText();
+  const bytes = new Blob([src]).size;
+  let how;
+  try {
+    if (state.handle && state.handle.createWritable) {
+      const w = await state.handle.createWritable();
+      await w.write(src);
+      await w.close();
+      how = `wrote ${state.name}`;
+    } else {
+      const res = await fetch(`/save?path=${encodeURIComponent(state.name)}`, {
+        method: 'POST', body: src, headers: { 'content-type': 'text/html;charset=utf-8' },
+      });
+      if (!res.ok) throw new Error(`POST /save -> ${res.status}`);
+      how = `posted ${state.name}`;
+    }
+  } catch (err) {
+    download(src);
+    how = `downloaded ${state.name} (${err.message})`;
+  }
+  state.dirty = false;
+  status(`${how} — ${bytes} bytes, ${warnings.length} warning(s)`);
+  if (warnings.length) console.info('neodoc: save warnings', warnings);
+  refresh();
+}
+
+// -------------------------------------------------------------- live tree view
+
+let cachedTree = null;
+let cachedRev = -1;
+let domRev = 0;
+const bumpDom = () => { domRev += 1; };
+/** The live body as a parse tree — used for selectors and comment listing only. */
+function liveTree() {
+  if (cachedTree && cachedRev === domRev) return cachedTree;
+  const html = blocksInBody().map((n) => n.outerHTML).join('\n');
+  cachedTree = parse(`<body>\n${html}\n</body>`);
+  cachedRev = domRev;
+  return cachedTree;
+}
+/**
+ * Canonical selector of a live element, e.g. `body > section:nth-child(2) > p:nth-child(3)`.
+ *
+ * select.js's selectorOf/pathOf stop walking when they reach the root they were
+ * given, so they can never emit the leading `body` segment (selectorOf(body, el)
+ * returns '' for a direct child of body). The path is therefore built here and
+ * then resolved through select.js's query — the same engine `neodoc get` and
+ * `addComment` use — so the status bar never prints a command that cannot run.
+ */
+function liveSelector(el) {
+  const parts = [];
+  for (let n = el; n && n !== document.body; n = n.parentNode) {
+    const sibs = [...n.parentNode.children].filter((c) => c !== CHROME);
+    const sameTag = sibs.filter((c) => c.nodeName === n.nodeName);
+    let seg = n.nodeName.toLowerCase();
+    if (n.id) seg += `#${n.id}`;
+    else if (sibs.length > 1) {
+      seg += sameTag.length > 1 ? `:nth-of-type(${sameTag.indexOf(n) + 1})` : `:nth-child(${sibs.indexOf(n) + 1})`;
+    }
+    parts.unshift(seg);
+  }
+  const sel = ['body', ...parts].join(' > ');
+  const body = liveTree().root.children[0];
+  try { return query(body, sel) ? sel : 'body'; } catch { return 'body'; }
+}
+
+// ---------------------------------------------------------------- input rules
+
+const INLINE_RULES = [
+  [/!\[([^\]\n]*)\]\(([^)\s]+)\)$/, (m) => h('img', { alt: m[1], src: m[2] })],
+  [/\[([^\]\n]+)\]\(([^)\s]+)\)$/, (m) => h('a', { href: m[2] }, text(m[1]))],
+  [/\*\*([^*\n]+)\*\*$/, (m) => h('strong', {}, text(m[1]))],
+  [/~~([^~\n]+)~~$/, (m) => h('s', {}, text(m[1]))],
+  [/==([^=\n]+)==$/, (m) => h('mark', {}, text(m[1]))],
+  [/`([^`\n]+)`$/, (m) => h('code', {}, text(m[1]))],
+  [/(?<![*\w])\*([^*\n]+)\*$/, (m) => h('em', {}, text(m[1]))],
+];
+
+/** Replace a block and put the caret in `caretTarget` (default: the new block). */
+function replaceBlock(block, next, caretTarget = next) {
+  block.replaceWith(next);
+  setCaret(caretTarget, 0);
+  return true;
+}
+
+/** Block-start markdown rules: `# `, `- `, `1. `, `> `, ```` ``` ````, `---`. */
+function runBlockRule() {
+  const r = caretRange();
+  if (!r || !r.collapsed || r.startContainer.nodeType !== 3) return false;
+  const block = blockOf(r.startContainer);
+  if (!block || block.nodeName !== 'P') return false;
+  if (block.childNodes.length !== 1 || block.firstChild !== r.startContainer) return false;
+  const s = r.startContainer.data.replace(/\u00a0/g, ' ');
+  if (r.startOffset !== s.length) return false;
+  let m;
+  if ((m = /^(#{1,6}) $/.exec(s))) return replaceBlock(block, h(`h${m[1].length}`));
+  if (/^[-*+] $/.test(s)) { const li = h('li'); return replaceBlock(block, h('ul', {}, li), li); }
+  if (/^\d+\. $/.test(s)) { const li = h('li'); return replaceBlock(block, h('ol', {}, li), li); }
+  if (s === '> ') { const p = h('p'); return replaceBlock(block, h('blockquote', {}, p), p); }
+  if (s === '```') return replaceBlock(block, h('pre'));
+  if (s === '---') {
+    const hr = h('hr');
+    block.replaceWith(hr);
+    const after = h('p');
+    hr.after(after);
+    setCaret(after, 0);
+    return true;
+  }
+  return false;
+}
+
+/** Closing-delimiter rules: `**b**`, `*i*`, `` `c` ``, `~~s~~`, `==m==`, `[t](u)`, `![a](u)`. */
+function runInlineRule() {
+  const r = caretRange();
+  if (!r || !r.collapsed || r.startContainer.nodeType !== 3) return false;
+  const node = r.startContainer;
+  const before = node.data.slice(0, r.startOffset);
+  for (const [re, make] of INLINE_RULES) {
+    const m = re.exec(before);
+    if (!m) continue;
+    const range = document.createRange();
+    range.setStart(node, m.index);
+    range.setEnd(node, r.startOffset);
+    const el = make(m);
+    range.deleteContents();
+    range.insertNode(el);
+    setCaretAfter(el);
+    return true;
+  }
+  return false;
+}
+
+function onInput(e) {
+  if (e && e.inputType && !/^insert(Text|CompositionText|FromComposition)$/.test(e.inputType)) return;
+  if (state.suggest) return; // suggest mode inserts its own nodes
+  runBlockRule();
+  runInlineRule();
+  edited();
+}
+const edited = () => { state.dirty = true; bumpDom(); refresh(); };
+
+// ------------------------------------------------------------------- block edits
+
+function setBlockName(block, name) {
+  if (block.nodeName.toLowerCase() === name) name = 'p';
+  const nu = h(name);
+  while (block.firstChild) nu.append(block.firstChild);
+  block.replaceWith(nu);
+  selectContents(nu);
+  return nu;
+}
+function toggleList(block, type) {
+  const p = block.parentNode;
+  if (block.nodeName === 'LI' && p.nodeName.toLowerCase() === type && p.children.length === 1) {
+    const nu = h('p');
+    while (block.firstChild) nu.append(block.firstChild);
+    p.replaceWith(nu);
+    selectContents(nu);
+    return nu;
+  }
+  if (block.nodeName === 'LI' && p.nodeName.toLowerCase() === type) {
+    const nu = h('p');
+    while (block.firstChild) nu.append(block.firstChild);
+    block.replaceWith(nu);
+    selectContents(nu);
+    return nu;
+  }
+  const li = h('li');
+  while (block.firstChild) li.append(block.firstChild);
+  block.replaceWith(h(type, {}, li));
+  setCaret(li, 0);
+  return li;
+}
+function toggleBlockquote(block) {
+  if (block.parentNode.nodeName === 'BLOCKQUOTE' && block.parentNode.children.length === 1) {
+    const q = block.parentNode;
+    q.replaceWith(block);
+    selectContents(block);
+    return block;
+  }
+  const q = h('blockquote');
+  block.replaceWith(q);
+  q.append(block);
+  selectContents(block);
+  return block;
+}
+function toPre(block) {
+  if (block.nodeName === 'PRE') {
+    const nu = h('p');
+    while (block.firstChild) nu.append(block.firstChild);
+    block.replaceWith(nu);
+    setCaret(nu, 0);
+    return nu;
+  }
+  const pre = h('pre');
+  while (block.firstChild) pre.append(block.firstChild);
+  block.replaceWith(pre);
+  setCaret(pre, 0);
+  return pre;
+}
+function insertHrHere() {
+  const r = caretRange();
+  const block = r && blockOf(r.startContainer);
+  const hr = h('hr');
+  if (!block) { document.body.insertBefore(hr, CHROME); return; }
+  block.after(hr);
+  const p = h('p');
+  hr.after(p);
+  setCaret(p, 0);
+}
+
+function toggleInline(name, attrs = {}) {
+  const r = caretRange();
+  if (!r) return;
+  const holder = r.collapsed ? null : ancestorNamed(r.commonAncestorContainer, name);
+  if (holder && !r.collapsed) {
+    const kids = [...holder.childNodes];
+    holder.replaceWith(...kids);
+    const sel = document.createRange();
+    sel.setStartBefore(kids[0]);
+    sel.setEndAfter(kids[kids.length - 1]);
+    focusRange(sel);
+    return;
+  }
+  const el = h(name, attrs);
+  if (r.collapsed) {
+    r.insertNode(el);
+    setCaret(el, 0);
+    return;
+  }
+  el.append(r.extractContents());
+  r.insertNode(el);
+  selectContents(el);
+}
+function ancestorNamed(node, name) {
+  let n = node.nodeType === 3 ? node.parentNode : node;
+  while (n && n !== document.body) {
+    if (n.nodeName.toLowerCase() === name) return n;
+    n = n.parentNode;
+  }
+  return null;
+}
+
+// -------------------------------------------------------------------- keyboard
+
+function onEnter(e) {
+  const r = caretRange();
+  if (!r) return;
+  e.preventDefault();
+  const block = blockOf(r.startContainer);
+  if (!block) {
+    const p = h('p');
+    r.deleteContents();
+    r.insertNode(p);
+    setCaret(p, 0);
+    return edited();
+  }
+  const name = block.nodeName.toLowerCase();
+  if (name === 'pre' || name === 'td' || name === 'th') return insertBreak();
+  if (name === 'li') {
+    if (block.textContent === '') {
+      // Empty item: leave the list (or remove it, if it was the only item).
+      const list = block.parentNode;
+      const left = h('p');
+      block.replaceWith(left);
+      if (!list.children.length) list.remove();
+      setCaret(left, 0);
+    } else {
+      const li = h('li');
+      li.append(takeTail(block, r));
+      block.after(li);
+      setCaret(li, 0);
+    }
+    return edited();
+  }
+  if (name === 'p' && block.parentNode.nodeName === 'BLOCKQUOTE'
+      && block.parentNode.children.length === 1 && block.textContent === '') {
+    const q = block.parentNode;
+    const after = h('p');
+    q.after(after);
+    q.remove();
+    setCaret(after, 0);
+    return edited();
+  }
+  const next = h('p');
+  next.append(takeTail(block, r));
+  block.after(next);
+  if (!block.hasChildNodes()) block.remove();
+  setCaret(next, 0);
+  return edited();
+}
+/** Everything from the caret to the end of the block, as a fragment. */
+function takeTail(block, range) {
+  const after = document.createRange();
+  after.setStart(range.endContainer, range.endOffset);
+  after.setEnd(block, block.childNodes.length);
+  const frag = after.extractContents();
+  range.deleteContents();
+  return frag;
+}
+/** A hard line break inside the current block (`<br>` is in the vocabulary). */
+function insertBreak() {
+  const r = caretRange();
+  if (!r) return edited();
+  r.deleteContents();
+  const br = h('br');
+  r.insertNode(br);
+  setCaretAfter(br);
+  edited();
+}
+
+function onShiftEnter(e) {
+  e.preventDefault();
+  insertBreak();
+}
+
+function onBackspace(e) {
+  const r = caretRange();
+  if (!r || !r.collapsed || state.suggest) return;
+  const block = blockOf(r.startContainer);
+  if (!block || !atBlockStart(r, block)) return;
+  const name = block.nodeName.toLowerCase();
+  if (name.startsWith('h') || name === 'li' || name === 'p') {
+    if (block.textContent !== '') return;
+    const container = block.parentNode;
+    if (name === 'p' && container.nodeName !== 'BLOCKQUOTE') return;
+    e.preventDefault();
+    const left = h('p');
+    while (block.firstChild) left.append(block.firstChild);
+    if (container.nodeName === 'UL' || container.nodeName === 'OL') {
+      container.after(left); // an empty item at the start of a list leaves the list
+      block.remove();
+      if (!container.children.length) container.remove();
+    } else {
+      block.replaceWith(left);
+      if (container.nodeName === 'BLOCKQUOTE' && !container.children.length) container.remove();
+    }
+    setCaret(left, 0);
+    return edited();
+  }
+  if (name !== 'p' || block.textContent !== '') return;
+  const prev = block.previousElementSibling;
+  if (!prev || !LEAF.has(prev.nodeName.toLowerCase())) return;
+  e.preventDefault();
+  while (prev.firstChild) block.prepend(prev.lastChild);
+  prev.remove();
+  setCaret(block, 0);
+  return edited();
+}
+
+function onTab(e) {
+  const r = caretRange();
+  const block = r && blockOf(r.startContainer);
+  if (!block || block.nodeName !== 'LI') return;
+  e.preventDefault();
+  const list = block.parentNode;
+  if (e.shiftKey) {
+    const outer = list.parentNode;
+    if (outer === document.body || !['UL', 'OL', 'LI'].includes(outer.nodeName)) {
+      // Top-level item: leave the list entirely.
+      const left = h('p');
+      while (block.firstChild) left.append(block.firstChild);
+      block.replaceWith(left);
+      if (!list.children.length) list.remove();
+      setCaret(left, 0);
+      return edited();
+    }
+    list.after(block);
+    if (!list.children.length) list.remove();
+    setCaret(block, 0);
+    return edited();
+  }
+  const prev = block.previousElementSibling;
+  if (!prev) return;
+  let sub = prev.lastElementChild;
+  if (!sub || sub.nodeName.toLowerCase() !== list.nodeName.toLowerCase()) {
+    sub = h(list.nodeName.toLowerCase());
+    prev.append(sub);
+  }
+  sub.append(block);
+  setCaret(block, 0);
+  return edited();
+}
+
+// --------------------------------------------------------------- suggest mode
+
+/** Text offset of (container, offset) inside `block`. */
+function offsetIn(block, container, offset) {
+  if (container === block) {
+    let n = 0;
+    for (let i = 0; i < offset && i < block.childNodes.length; i++) n += block.childNodes[i].textContent.length;
+    return n;
+  }
+  let n = 0;
+  for (const t of textNodesIn(block)) {
+    if (t === container) return n + offset;
+    n += t.data.length;
+  }
+  return n;
+}
+function locate(block, offset) {
+  let left = offset;
+  for (const t of textNodesIn(block)) {
+    if (left <= t.data.length) return [t, left];
+    left -= t.data.length;
+  }
+  return [block, block.childNodes.length];
+}
+function suggestDelete(kind) {
+  const r = caretRange();
+  if (!r) return false;
+  const block = blockOf(r.startContainer);
+  if (!block) return false;
+  const text0 = block.textContent;
+  if (r.collapsed) {
+    const back = /Backward/.test(kind);
+    const word = /Word|Line/.test(kind);
+    const at = offsetIn(block, r.startContainer, r.startOffset);
+    let from = at;
+    let to = at;
+    if (back) {
+      to = at;
+      from = word ? wordBack(text0, at) : Math.max(0, at - 1);
+    } else {
+      from = at;
+      to = word ? wordFwd(text0, at) : Math.min(text0.length, at + 1);
+    }
+    if (from === to) return false;
+    const [sn, so] = locate(block, from);
+    const [en, eo] = locate(block, to);
+    r.setStart(sn, so);
+    r.setEnd(en, eo);
+  }
+  if (!r.toString()) return false;
+  const del = ancestorNamed(r.commonAncestorContainer, 'del');
+  const ins = ancestorNamed(r.commonAncestorContainer, 'ins');
+  if (del) { r.deleteContents(); return true; } // deleting our own deletion
+  const removed = r.toString();
+  const node = h('del', { 'data-author': AUTHOR, 'data-at': now() });
+  node.append(r.extractContents());
+  r.insertNode(node);
+  if (ins) { /* deleting existing text inside our own insertion: still track it */ }
+  setCaretAfter(node);
+  console.info(`neodoc: tracked deletion of ${JSON.stringify(removed)}`);
+  return true;
+}
+const wordBack = (s, at) => { let i = at; while (i > 0 && !/\s/.test(s[i - 1])) i--; while (i > 0 && /\s/.test(s[i - 1]) && i === at) i--; return i; };
+const wordFwd = (s, at) => { let i = at; while (i < s.length && !/\s/.test(s[i])) i++; return i; };
+
+function suggestInsert(data) {
+  const r = caretRange();
+  if (!r) return false;
+  if (!r.collapsed) {
+    // Replacing a selection under suggestion mode = tracked delete + tracked insert.
+    const del = h('del', { 'data-author': AUTHOR, 'data-at': now() });
+    del.append(r.extractContents());
+    r.insertNode(del);
+    if (!del.textContent) del.remove();
+  }
+  const r2 = caretRange();
+  if (!blockOf(r2.startContainer)) ensureBlock(r2); // no inline element directly in <body>
+  const at = caretRange();
+  const host = currentIns(at.startContainer);
+  if (host) {
+    at.insertNode(text(data));
+  } else {
+    const ins = h('ins', { 'data-author': AUTHOR, 'data-at': now() }, text(data));
+    at.insertNode(ins);
+    setCaretAfter(ins.firstChild);
+  }
+  return true;
+}
+/** Put a caret inside a block, creating a <p> when the caret sits between blocks. */
+function ensureBlock(range) {
+  if (blockOf(range.startContainer)) return;
+  const p = h('p');
+  range.deleteContents();
+  range.insertNode(p);
+  setCaret(p, 0);
+}
+/** Reuse the <ins> the caret is already inside (same author) so runs stay merged. */
+function currentIns(node) {
+  const el = ancestorNamed(node, 'ins');
+  return el && el.getAttribute('data-author') === AUTHOR ? el : null;
+}
+
+function onBeforeInput(e) {
+  if (!state.suggest) return;
+  const t = e.inputType || '';
+  if (t === 'insertText' && e.data) {
+    e.preventDefault();
+    suggestInsert(e.data);
+    edited();
+  } else if (/^delete(Content|Word|SoftLine|HardLine)/.test(t)) {
+    e.preventDefault();
+    suggestDelete(t);
+    edited();
+  }
+}
+
+// ----------------------------------------------------------------------- paste
+
+/** Drop or unwrap anything outside the vocabulary: pasted HTML is never trusted. */
+function sanitizeTree(node) {
+  const kids = [];
+  for (const c of node.children || []) {
+    if (c.type === 'text') { kids.push(c); continue; }
+    if (c.type === 'comment') continue;
+    const name = RENAMES[c.name] || c.name.toLowerCase();
+    sanitizeTree(c);
+    if (PASTE_DROP.has(name)) continue;
+    if (name === 'aside' && c.attrs['data-thread']) continue; // pasted threads are metadata
+    if (!VOCAB.has(name)) { kids.push(...(c.children || [])); continue; } // unwrap wrappers like <div>/<span>
+    c.name = name;
+    const attrs = {};
+    for (const [k, v] of Object.entries(c.attrs || {})) if (isAttrAllowed(name, k)) attrs[k] = v;
+    if (name === 'a') {
+      const href = attrs.href || '';
+      // Only navigable URLs survive; javascript:/data: hrefs would be behaviour.
+      const ok = /^(https?:|mailto:|#|\/|\.)/i.test(href) || /^[\w.~-]+(\/|$)/.test(href);
+      if (!ok || /^\s*(javascript|vbscript|data):/i.test(href)) delete attrs.href;
+      if (!attrs.href && !attrs.id) { kids.push(...(c.children || [])); continue; }
+    }
+    if (name === 'img') {
+      if (!attrs.src) continue;
+      if (!attrs.alt) attrs.alt = '';
+    }
+    if (name === 'mark') delete attrs['data-c']; // an orphaned anchor would be a lint error
+    c.attrs = attrs;
+    kids.push(c);
+  }
+  node.children = kids;
+}
+function sanitizedNodes(html) {
+  const { lines } = formatFragment(html);
+  if (!lines.length) return [];
+  const { root } = parse(`<body>\n${lines.join('\n')}\n</body>`);
+  const body = root.children[0];
+  if (!body) return [];
+  sanitizeTree(body);
+  return body.children.map(treeToDom).filter(Boolean);
+}
+function markdownNodes(md) {
+  const { html, warnings } = fromMarkdown(md);
+  if (warnings.length) console.info('neodoc: markdown paste warnings', warnings);
+  return sanitizedNodes(html);
+}
+function onPaste(e) {
+  const dt = e.clipboardData;
+  if (!dt) return;
+  const html = dt.getData('text/html');
+  const md = dt.getData('text/markdown');
+  const plain = dt.getData('text/plain');
+  if (!html && !md && !plain) return;
+  e.preventDefault();
+  if (html) return insertNodes(sanitizedNodes(html));
+  if (md) return insertNodes(markdownNodes(md));
+  const nodes = [];
+  plain.split('\n').forEach((line, i) => {
+    if (i) nodes.push(h('br'));
+    if (line) nodes.push(text(line));
+  });
+  return insertInline(nodes);
+}
+/** Insert a run of inline nodes at the caret. */
+function insertInline(nodes) {
+  if (!nodes.length) return;
+  const r = caretRange();
+  if (!r) return;
+  if (!blockOf(r.startContainer)) {
+    ensureBlock(r);
+    const at = caretRange();
+    at.insertNode(nodes[0]);
+    for (const n of nodes.slice(1)) nodes[0].parentNode.insertBefore(n, nodes[0].nextSibling);
+    setCaretAfter(nodes[nodes.length - 1]);
+    return edited();
+  }
+  r.deleteContents();
+  const frag = document.createDocumentFragment();
+  frag.append(...nodes);
+  r.insertNode(frag);
+  setCaretAfter(nodes[nodes.length - 1]);
+  edited();
+}
+/** Insert whole blocks at the caret: split the caret block, splice, re-close. */
+function insertNodes(nodes) {
+  if (!nodes.length) return;
+  const r = caretRange();
+  if (!r) return;
+  const hasBlock = nodes.some((n) => n.nodeType === 1 && !['A', 'CODE', 'STRONG', 'EM', 'S', 'U', 'MARK', 'INS', 'DEL', 'SUB', 'SUP', 'IMG', 'BR', 'SPAN'].includes(n.nodeName));
+  const block = blockOf(r.startContainer);
+  if (!hasBlock || !block) return insertInline(nodes);
+  const insideLi = ['UL', 'OL'].includes(block.parentNode.nodeName);
+  const tail = takeTail(block, r);
+  const parent = insideLi ? block : block.parentNode;
+  const anchor = insideLi ? null : block.nextSibling;
+  for (const n of nodes) parent.insertBefore(n, anchor);
+  const tailEl = h('p');
+  tailEl.append(tail);
+  if (tailEl.textContent !== '' || tailEl.childNodes.length) {
+    if (insideLi) block.append(tailEl); else parent.insertBefore(tailEl, anchor);
+  }
+  if (block.textContent === '' && !insideLi) block.remove();
+  setCaret(tailEl.childNodes.length ? tailEl : nodes[nodes.length - 1], 0);
+  edited();
+}
+
+// ---------------------------------------------------------------------- images
+
+const readAsDataURL = (file) => new Promise((resolve, reject) => {
+  const fr = new FileReader();
+  fr.onload = () => resolve(fr.result);
+  fr.onerror = () => reject(fr.error);
+  fr.readAsDataURL(file);
+});
+async function insertImage(file) {
+  const src = state.embed ? await readAsDataURL(file) : `assets/${file.name}`;
+  const img = h('img', { alt: file.name.replace(/\.[^.]+$/, ''), src });
+  insertInline([img]);
+  if (!state.embed) status(`linked ${src} — copy the file into assets/`);
+  refresh();
+}
+
+// -------------------------------------------------------------------- comments
+
+const bodyNodeOf = (root) => {
+  const html = (root.children || []).find((c) => c.type === 'element' && c.name === 'html');
+  return html && (html.children || []).find((c) => c.name === 'body');
+};
+function commentOnSelection() {
+  const r = caretRange();
+  if (!r) return;
+  const block = blockOf(r.startContainer) || ancestorNamed(r.startContainer, 'p');
+  if (!block) { status('put the caret in a block first'); return; }
+  const quote = r.collapsed ? '' : r.toString();
+  const body = prompt('Comment');
+  if (!body) return;
+  const selector = liveSelector(block);
+  let made;
+  try {
+    made = mutate((tree) => addComment(tree, {
+      body: bodyNodeOf(tree), selector, quote, text: body, author: AUTHOR, at: now(),
+    }));
+  } catch (err) {
+    status(`comment failed: ${err.message}`);
+    return;
+  }
+  const marked = document.querySelector(`mark[data-c="${made.id}"]`);
+  if (marked) selectContents(marked);
+  status(`comment ${made.id} added`);
+}
+function renderThreads() {
+  const tree = liveTree().root;
+  let threads = [];
+  try { threads = listComments(tree) || []; } catch (err) { console.info('neodoc: listComments', err); }
+  const list = $('#threads');
+  list.replaceChildren();
+  $('#no-comments').hidden = threads.length > 0;
+  for (const t of threads) {
+    const li = h('li', { 'data-id': t.id });
+    li.append(h('b', {}, `${t.id} · ${t.author || 'unknown'}`));
+    const bodyP = h('p');
+    bodyP.textContent = t.text || '';
+    li.append(bodyP);
+    if (t.anchorText) { const q = h('blockquote'); q.textContent = t.anchorText; li.append(q); }
+    const actions = h('p');
+    if (t.state === 'resolved') {
+      actions.append(h('em', {}, 'resolved'));
+    } else {
+      actions.append(h('button', { type: 'button', 'aria-label': `Resolve ${t.id}` }, 'Resolve'));
+    }
+    actions.append(h('button', { type: 'button', 'aria-label': `Reply to ${t.id}` }, 'Reply'));
+    li.append(actions);
+    list.append(li);
+  }
+  return threads;
+}
+function threadAction(id, action) {
+  if (action === 'resolve') mutate((tree) => resolveComment(tree, id, true));
+  if (action === 'reply') {
+    const body = prompt(`Reply to ${id}`);
+    if (!body) return;
+    mutate((tree) => replyToComment(tree, id, { text: body, author: AUTHOR, at: now() }));
+  }
+  refresh();
+}
+
+// -------------------------------------------------------------------- commands
+
+const COMMANDS = {
+  open: () => openFile(),
+  save: () => save(),
+  strong: () => toggleInline('strong'),
+  em: () => toggleInline('em'),
+  u: () => toggleInline('u'),
+  s: () => toggleInline('s'),
+  code: () => toggleInline('code'),
+  mark: () => toggleInline('mark'),
+  a: () => {
+    const url = prompt('Link URL', 'https://');
+    if (url) toggleInline('a', { href: url });
+  },
+  h1: () => blockCommand((b) => setBlockName(b, 'h1')),
+  h2: () => blockCommand((b) => setBlockName(b, 'h2')),
+  h3: () => blockCommand((b) => setBlockName(b, 'h3')),
+  h4: () => blockCommand((b) => setBlockName(b, 'h4')),
+  h5: () => blockCommand((b) => setBlockName(b, 'h5')),
+  h6: () => blockCommand((b) => setBlockName(b, 'h6')),
+  ul: () => blockCommand((b) => toggleList(b, 'ul')),
+  ol: () => blockCommand((b) => toggleList(b, 'ol')),
+  blockquote: () => blockCommand((b) => toggleBlockquote(b)),
+  pre: () => blockCommand((b) => toPre(b)),
+  hr: () => { insertHrHere(); edited(); },
+  img: () => $('#image-input').click(),
+  comment: () => commentOnSelection(),
+  suggest: () => toggleSuggest(),
+  accept: () => changeCommand(acceptChanges, 'accepted'),
+  reject: () => changeCommand(rejectChanges, 'rejected'),
+  'copy-cli': () => { navigator.clipboard.writeText($('#st-cli').textContent); status('CLI command copied'); },
+};
+function blockCommand(fn) {
+  const r = caretRange();
+  const block = r && blockOf(r.startContainer);
+  if (!block) { status('put the caret in a block first'); return; }
+  fn(block);
+  edited();
+}
+function changeCommand(fn, label) {
+  const r = caretRange();
+  const block = r && blockOf(r.startContainer);
+  if (!block) { status('put the caret in a block first'); return; }
+  const selector = liveSelector(block);
+  try {
+    const counts = mutate((tree) => fn(tree, selector));
+    status(`${label} ${counts.ins} ins / ${counts.del} del in ${selector}`);
+  } catch (err) { status(`${label} failed: ${err.message}`); }
+}
+function toggleSuggest() {
+  state.suggest = !state.suggest;
+  const btn = document.querySelector('[data-cmd="suggest"]');
+  btn.setAttribute('aria-pressed', String(state.suggest));
+  status(state.suggest ? 'suggest mode on — edits are tracked' : 'suggest mode off');
+}
+
+async function openFile() {
+  if (window.showOpenFilePicker) {
+    try {
+      const [handle] = await window.showOpenFilePicker({
+        types: [{ description: 'Neodoc document', accept: { 'text/html': ['.html', '.htm'] } }],
+      });
+      const file = await handle.getFile();
+      return openText(file.name, await file.text(), handle);
+    } catch (err) {
+      if (err && err.name === 'AbortError') return;
+    }
+  }
+  $('#open-input').click();
+}
+
+// ---------------------------------------------------------------------- status
+
+function refresh() {
+  const { root } = liveTree();
+  const body = root.children[0];
+  $('#st-blocks').textContent = `${(body ? body.children.filter((c) => c.type === 'element') : []).length} blocks`;
+  const sel = caretRange();
+  const block = sel ? blockOf(sel.startContainer) : null;
+  const path = block ? liveSelector(block) : 'body';
+  $('#st-sel').textContent = path;
+  $('#st-cli').textContent = `neodoc get ${state.name} '${path}'`;
+  const threads = renderThreads();
+  $('#st-comments').textContent = `${threads.filter((t) => t.state !== 'resolved').length} comments`;
+  $('#st-dirty').textContent = state.dirty ? 'unsaved' : 'saved';
+  $('#st-dirty').dataset.dirty = String(state.dirty);
+}
+
+// ------------------------------------------------------------------------ wire
+
+// Buttons must not steal the selection from the document.
+$('#chrome').addEventListener('mousedown', (e) => {
+  if (e.target.closest('button')) e.preventDefault();
+});
+$('#chrome').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-cmd]');
+  if (btn) { const fn = COMMANDS[btn.dataset.cmd]; if (fn) fn(); return; }
+  const threadBtn = e.target.closest('#threads button');
+  if (threadBtn) {
+    threadAction(threadBtn.closest('li').dataset.id, /Resolve/.test(threadBtn.getAttribute('aria-label')) ? 'resolve' : 'reply');
+  }
+});
+$('#embed').addEventListener('change', (e) => { state.embed = e.target.checked; });
+$('#open-input').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (file) await openText(file.name, await file.text());
+  e.target.value = '';
+});
+$('#image-input').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (file) await insertImage(file);
+  e.target.value = '';
+});
+
+document.addEventListener('input', (e) => {
+  if (e.target === document.body || document.body.contains(e.target)) onInput(e);
+});
+document.addEventListener('beforeinput', onBeforeInput);
+document.addEventListener('paste', onPaste);
+document.addEventListener('selectionchange', () => {
+  if (!document.body.contains(document.getSelection()?.anchorNode ?? document.body)) return;
+  refresh();
+});
+document.addEventListener('keydown', (e) => {
+  const mod = e.metaKey || e.ctrlKey;
+  if (!mod) {
+    if (e.key === 'Tab') return onTab(e);
+    if (e.key === 'Enter') return e.shiftKey ? onShiftEnter(e) : onEnter(e);
+    if (e.key === 'Backspace') return onBackspace(e);
+    return;
+  }
+  const code = e.code;
+  if (e.altKey) {
+    if (/^Digit[1-6]$/.test(code)) { e.preventDefault(); return COMMANDS[`h${code.slice(5)}`](); }
+    if (code === 'KeyM') { e.preventDefault(); return commentOnSelection(); }
+    return;
+  }
+  if (e.shiftKey) {
+    if (code === 'Digit7') { e.preventDefault(); return COMMANDS.ol(); }
+    if (code === 'Digit8') { e.preventDefault(); return COMMANDS.ul(); }
+    return;
+  }
+  switch (e.key.toLowerCase()) {
+    case 's': e.preventDefault(); return save();
+    case 'b': e.preventDefault(); return COMMANDS.strong();
+    case 'i': e.preventDefault(); return COMMANDS.em();
+    case 'u': e.preventDefault(); return COMMANDS.u();
+    case 'k': e.preventDefault(); return COMMANDS.a();
+    default: return;
+  }
+});
+document.addEventListener('dragover', (e) => {
+  if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) e.preventDefault();
+});
+document.addEventListener('drop', async (e) => {
+  const file = e.dataTransfer && [...e.dataTransfer.files].find((f) => f.type.startsWith('image/'));
+  if (!file) return;
+  e.preventDefault();
+  await insertImage(file);
+});
+
+// ------------------------------------------------------------------------ boot
+
+sweepEditorNodes();
+if (!(await loadServed())) {
+  status('no file open — Open a .nd.html file, or run neodoc serve');
+}
+if (!blocksInBody().length) document.body.prepend(h('p'));
+refresh();
+window.addEventListener('beforeunload', (e) => {
+  if (state.dirty) e.preventDefault();
+});
+
+// Exposed for the CLI/e2e driver: no behaviour depends on it.
+window.neodocEditor = { canonicalText, save, openText, applyDocument, state, liveSelector };
+
+__mods["editor/editor"] = {};
+})();
+</script>
+</body>
+</html>

@@ -17,8 +17,8 @@
 
 import { format, formatFragment, serialize } from '../src/format.js';
 import { parse } from '../src/parse.js';
-import { pathOf, RENAMES, VOCAB, isAttrAllowed } from '../src/tree.js';
-import { selectorOf as selectSelectorOf } from '../src/select.js';
+import { RENAMES, VOCAB, isAttrAllowed } from '../src/tree.js';
+import { query } from '../src/select.js';
 import { fromMarkdown } from '../src/markdown.js';
 import {
   addComment, listComments, resolveComment, replyToComment, acceptChanges, rejectChanges,
@@ -26,7 +26,6 @@ import {
 
 const AUTHOR = 'editor';
 const now = () => new Date().toISOString().replace(/\.\d+Z$/, 'Z');
-const selectorOf = selectSelectorOf || pathOf;
 
 const CHROME = document.getElementById('chrome');
 const CSS_LINK = document.getElementById('editor-css');
@@ -36,7 +35,6 @@ const $ = (sel) => document.querySelector(sel);
 const LEAF = new Set(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'li', 'td', 'th', 'figcaption', 'pre']);
 const CONTAINER = new Set(['ul', 'ol', 'blockquote', 'section', 'aside', 'figure', 'table',
   'thead', 'tbody', 'tr', 'li', 'td', 'th', 'figcaption']);
-const VOID = new Set(['br', 'hr', 'img']);
 // Dropped outright from pasted content; everything else outside the vocabulary is
 // unwrapped (kept as its children) so a paste can never inject behaviour.
 const PASTE_DROP = new Set(['script', 'style', 'iframe', 'object', 'embed', 'form', 'input',
@@ -102,24 +100,6 @@ function atBlockStart(range, block) {
 }
 function blocksInBody() {
   return [...document.body.children].filter((n) => n !== CHROME);
-}
-/** Node index path from <body>, counting elements only (matches the tree). */
-function domPath(node) {
-  const path = [];
-  let n = node;
-  while (n && n !== document.body) {
-    path.unshift([...n.parentNode.children].filter((c) => c !== CHROME).indexOf(n));
-    n = n.parentNode;
-  }
-  return path;
-}
-function nodeAtPath(root, path) {
-  let n = root;
-  for (const i of path) {
-    n = (n.children || []).filter((c) => c.type === 'element')[i];
-    if (!n) return null;
-  }
-  return n;
 }
 function treeToDom(node) {
   if (!node) return null;
@@ -188,12 +168,30 @@ function applyDocument(src) {
     if (!(a.name in ((html && html.attrs) || {}))) document.documentElement.removeAttribute(a.name);
   }
   for (const [k, v] of Object.entries((html && html.attrs) || {})) document.documentElement.setAttribute(k, v);
-  for (const n of blocksInBody()) n.remove();
+  for (const n of [...document.body.childNodes]) if (n !== CHROME) n.remove();
   const kids = body ? body.children.map(treeToDom).filter(Boolean) : [];
   document.body.prepend(...(kids.length ? kids : [h('p')]));
   document.body.append(CHROME);
   bumpDom();
   refresh();
+}
+
+/**
+ * Drop every editor-owned node that is not the document: the module <script>, the
+ * comments index.html is written with, and the whitespace text nodes around them.
+ * The HTML parser moves an `</head>`-time comment INTO the body, and format() keeps
+ * comments, so anything left here would be written into the user's file. Runs once,
+ * at boot, while the only document content is the empty <p>.
+ */
+function sweepEditorNodes() {
+  for (const n of [...document.documentElement.childNodes]) {
+    if (n !== document.head && n !== document.body) n.remove();
+  }
+  for (const n of [...document.body.childNodes]) {
+    if (n === CHROME) continue;
+    if (n.nodeType !== 1) n.remove();
+    else if (n.nodeName === 'SCRIPT' || n.nodeName === 'STYLE' || n.nodeName === 'LINK') n.remove();
+  }
 }
 
 /** Mutate the document tree and show the result. `fn(tree)` gets the #root. */
@@ -280,11 +278,30 @@ function liveTree() {
   cachedRev = domRev;
   return cachedTree;
 }
-/** Canonical selector of a live element, e.g. `body > section:nth-child(2) > p:nth-child(1)`. */
+/**
+ * Canonical selector of a live element, e.g. `body > section:nth-child(2) > p:nth-child(3)`.
+ *
+ * select.js's selectorOf/pathOf stop walking when they reach the root they were
+ * given, so they can never emit the leading `body` segment (selectorOf(body, el)
+ * returns '' for a direct child of body). The path is therefore built here and
+ * then resolved through select.js's query — the same engine `neodoc get` and
+ * `addComment` use — so the status bar never prints a command that cannot run.
+ */
 function liveSelector(el) {
-  const { root } = liveTree();
-  const node = nodeAtPath(root.children[0], domPath(el));
-  return node ? selectorOf(root, node) : 'body';
+  const parts = [];
+  for (let n = el; n && n !== document.body; n = n.parentNode) {
+    const sibs = [...n.parentNode.children].filter((c) => c !== CHROME);
+    const sameTag = sibs.filter((c) => c.nodeName === n.nodeName);
+    let seg = n.nodeName.toLowerCase();
+    if (n.id) seg += `#${n.id}`;
+    else if (sibs.length > 1) {
+      seg += sameTag.length > 1 ? `:nth-of-type(${sameTag.indexOf(n) + 1})` : `:nth-child(${sibs.indexOf(n) + 1})`;
+    }
+    parts.unshift(seg);
+  }
+  const sel = ['body', ...parts].join(' > ');
+  const body = liveTree().root.children[0];
+  try { return query(body, sel) ? sel : 'body'; } catch { return 'body'; }
 }
 
 // ---------------------------------------------------------------- input rules
@@ -299,32 +316,49 @@ const INLINE_RULES = [
   [/(?<![*\w])\*([^*\n]+)\*$/, (m) => h('em', {}, text(m[1]))],
 ];
 
-function replaceBlock(block, next, offset = 0) {
+/** Replace a block and put the caret in `caretTarget` (default: the new block). */
+function replaceBlock(block, next, caretTarget = next) {
   block.replaceWith(next);
-  setCaret(next, offset);
-  return next;
+  setCaret(caretTarget, 0);
+  return true;
 }
-function listBlock(block, type) {
-  const li = h('li');
-  while (block.firstChild) li.append(block.firstChild);
-  return replaceBlock(block, h(type, {}, li));
+
+/**
+ * Put the caret just after `node` so the next keystroke starts new content instead
+ * of continuing the element we just created. Anchoring the range at
+ * (parent, index+1) does not work: a browser resolves a block-final position to the
+ * inside of a trailing inline element, so typing after `**bold**` would extend the
+ * <strong>. A zero-length text node is unambiguous — and format() drops empty text
+ * nodes, so it never reaches the file.
+ */
+function caretAfter(node) {
+  const t = text('');
+  node.after(t);
+  setCaret(t, 0);
 }
 
 /** Block-start markdown rules: `# `, `- `, `1. `, `> `, ```` ``` ````, `---`. */
 function runBlockRule() {
   const r = caretRange();
-  if (!r || !r.collapsed || r.startContainer.nodeType !== 3) return false;
+  if (!r || !r.collapsed) return false;
   const block = blockOf(r.startContainer);
-  if (!block || block.nodeName !== 'P') return false;
-  if (block.childNodes.length !== 1 || block.firstChild !== r.startContainer) return false;
-  const s = r.startContainer.data;
-  if (r.startOffset !== s.length) return false;
+  // Only a plain-text paragraph converts; an existing inline element means edit, not input.
+  if (!block || block.nodeName !== 'P' || block.firstElementChild) return false;
+  const pre = document.createRange();
+  pre.setStart(block, 0);
+  pre.setEnd(r.startContainer, r.startOffset);
+  const post = document.createRange();
+  post.setStart(r.startContainer, r.startOffset);
+  post.setEnd(block, block.childNodes.length);
+  if (post.toString() !== '') return false;
+  // Browsers type a trailing space as U+00A0; the markdown marker is " ".
+  const s = pre.toString().replace(/\u00a0/g, ' ');
   let m;
-  if ((m = /^(#{1,6}) $/.exec(s))) return !!replaceBlock(block, h(`h${m[1].length}`));
-  if (/^[-*+] $/.test(s)) return !!listBlock(block, 'ul');
-  if (/^\d+\. $/.test(s)) return !!listBlock(block, 'ol');
-  if (s === '> ') return !!replaceBlock(block, h('blockquote', {}, h('p')));
-  if (s === '```') return !!replaceBlock(block, h('pre'));
+  if ((m = /^(#{1,6}) $/.exec(s))) return replaceBlock(block, h(`h${m[1].length}`));
+  if (/^[-*+] $/.test(s)) { const li = h('li'); return replaceBlock(block, h('ul', {}, li), li); }
+  if (/^\d+\. $/.test(s)) { const li = h('li'); return replaceBlock(block, h('ol', {}, li), li); }
+  if (s === '> ') { const p = h('p'); return replaceBlock(block, h('blockquote', {}, p), p); }
+  if (s === '```') return replaceBlock(block, h('pre'));
   if (s === '---') {
     const hr = h('hr');
     block.replaceWith(hr);
@@ -394,7 +428,9 @@ function toggleList(block, type) {
   }
   const li = h('li');
   while (block.firstChild) li.append(block.firstChild);
-  return replaceBlock(block, h(type, {}, li), 0);
+  block.replaceWith(h(type, {}, li));
+  setCaret(li, 0);
+  return li;
 }
 function toggleBlockquote(block) {
   if (block.parentNode.nodeName === 'BLOCKQUOTE' && block.parentNode.children.length === 1) {
@@ -427,7 +463,7 @@ function insertHrHere() {
   const r = caretRange();
   const block = r && blockOf(r.startContainer);
   const hr = h('hr');
-  if (!block) { document.body.insertBefore(hr, null); return; }
+  if (!block) { document.body.insertBefore(hr, CHROME); return; }
   block.after(hr);
   const p = h('p');
   hr.after(p);
@@ -481,11 +517,10 @@ function onEnter(e) {
     return edited();
   }
   const name = block.nodeName.toLowerCase();
-  if (name === 'pre') { insertPlain('\n'); return edited(); }
+  if (name === 'pre' || name === 'td' || name === 'th') return insertBreak();
   if (name === 'li') {
-    const tail = takeTail(block, r);
     if (block.textContent === '') {
-      // Empty item: leave the list (or replace it, if it was the only item).
+      // Empty item: leave the list (or remove it, if it was the only item).
       const list = block.parentNode;
       const left = h('p');
       block.replaceWith(left);
@@ -493,7 +528,7 @@ function onEnter(e) {
       setCaret(left, 0);
     } else {
       const li = h('li');
-      li.append(tail);
+      li.append(takeTail(block, r));
       block.after(li);
       setCaret(li, 0);
     }
@@ -508,12 +543,10 @@ function onEnter(e) {
     setCaret(after, 0);
     return edited();
   }
-  const tail = takeTail(block, r);
-  const next = h(name === 'li' ? 'p' : 'p');
-  next.append(tail);
-  if (!LEAF.has(name) || name === 'td' || name === 'th') { insertPlain('\n'); return edited(); }
+  const next = h('p');
+  next.append(takeTail(block, r));
   block.after(next);
-  if (block.textContent === '' && VOID.has(name) === false) block.remove();
+  if (!block.hasChildNodes()) block.remove();
   setCaret(next, 0);
   return edited();
 }
@@ -526,23 +559,20 @@ function takeTail(block, range) {
   range.deleteContents();
   return frag;
 }
-function insertPlain(s) {
+/** A hard line break inside the current block (`<br>` is in the vocabulary). */
+function insertBreak() {
   const r = caretRange();
-  if (!r) return;
+  if (!r) return edited();
   r.deleteContents();
-  r.insertNode(text(s));
-  setCaretAfter(document.getSelection().anchorNode || document.body);
-}
-
-function onShiftEnter(e) {
-  const r = caretRange();
-  if (!r) return;
-  e.preventDefault();
   const br = h('br');
-  r.deleteContents();
   r.insertNode(br);
   setCaretAfter(br);
   edited();
+}
+
+function onShiftEnter(e) {
+  e.preventDefault();
+  insertBreak();
 }
 
 function onBackspace(e) {
@@ -551,24 +581,30 @@ function onBackspace(e) {
   const block = blockOf(r.startContainer);
   if (!block || !atBlockStart(r, block)) return;
   const name = block.nodeName.toLowerCase();
-  if (name === 'li' || (name === 'p' && block.parentNode.nodeName === 'BLOCKQUOTE')) {
+  if (name.startsWith('h') || name === 'li' || name === 'p') {
     if (block.textContent !== '') return;
-    e.preventDefault();
     const container = block.parentNode;
+    if (name === 'p' && container.nodeName !== 'BLOCKQUOTE') return;
+    e.preventDefault();
     const left = h('p');
-    block.replaceWith(left);
-    if (!container.children.length) container.remove();
+    while (block.firstChild) left.append(block.firstChild);
+    if (container.nodeName === 'UL' || container.nodeName === 'OL') {
+      container.after(left); // an empty item at the start of a list leaves the list
+      block.remove();
+      if (!container.children.length) container.remove();
+    } else {
+      block.replaceWith(left);
+      if (container.nodeName === 'BLOCKQUOTE' && !container.children.length) container.remove();
+    }
     setCaret(left, 0);
     return edited();
   }
-  if (name.startsWith('h')) { e.preventDefault(); return edited(setBlockName(block, 'p') && undefined); }
   if (name !== 'p' || block.textContent !== '') return;
   const prev = block.previousElementSibling;
   if (!prev || !LEAF.has(prev.nodeName.toLowerCase())) return;
   e.preventDefault();
-  const target = prev;
-  while (target.firstChild) block.append(target.firstChild);
-  target.remove();
+  while (prev.firstChild) block.prepend(prev.lastChild);
+  prev.remove();
   setCaret(block, 0);
   return edited();
 }
@@ -683,20 +719,28 @@ function suggestInsert(data) {
     if (!del.textContent) del.remove();
   }
   const r2 = caretRange();
-  const host = stateLastIns(r2.startContainer);
+  if (!blockOf(r2.startContainer)) ensureBlock(r2); // no inline element directly in <body>
+  const at = caretRange();
+  const host = currentIns(at.startContainer);
   if (host) {
-    const at = document.createRange();
-    at.setStart(r2.startContainer, r2.startOffset);
     at.insertNode(text(data));
   } else {
     const ins = h('ins', { 'data-author': AUTHOR, 'data-at': now() }, text(data));
-    r2.insertNode(ins);
+    at.insertNode(ins);
     setCaretAfter(ins.firstChild);
   }
   return true;
 }
+/** Put a caret inside a block, creating a <p> when the caret sits between blocks. */
+function ensureBlock(range) {
+  if (blockOf(range.startContainer)) return;
+  const p = h('p');
+  range.deleteContents();
+  range.insertNode(p);
+  setCaret(p, 0);
+}
 /** Reuse the <ins> the caret is already inside (same author) so runs stay merged. */
-function stateLastIns(node) {
+function currentIns(node) {
   const el = ancestorNamed(node, 'ins');
   return el && el.getAttribute('data-author') === AUTHOR ? el : null;
 }
@@ -733,7 +777,10 @@ function sanitizeTree(node) {
     for (const [k, v] of Object.entries(c.attrs || {})) if (isAttrAllowed(name, k)) attrs[k] = v;
     if (name === 'a') {
       const href = attrs.href || '';
-      if (!/^(https?:|mailto:|#|\/|\.|[^a-z]+:)/i.test(href) || /^\s*javascript:/i.test(href)) delete attrs.href;
+      // Only navigable URLs survive; javascript:/data: hrefs would be behaviour.
+      const ok = /^(https?:|mailto:|#|\/|\.)/i.test(href) || /^[\w.~-]+(\/|$)/.test(href);
+      if (!ok || /^\s*(javascript|vbscript|data):/i.test(href)) delete attrs.href;
+      if (!attrs.href && !attrs.id) { kids.push(...(c.children || [])); continue; }
     }
     if (name === 'img') {
       if (!attrs.src) continue;
@@ -782,11 +829,11 @@ function insertInline(nodes) {
   const r = caretRange();
   if (!r) return;
   if (!blockOf(r.startContainer)) {
-    const p = h('p');
-    r.deleteContents();
-    r.insertNode(p);
-    p.append(...nodes);
-    setCaret(p, 0);
+    ensureBlock(r);
+    const at = caretRange();
+    at.insertNode(nodes[0]);
+    for (const n of nodes.slice(1)) nodes[0].parentNode.insertBefore(n, nodes[0].nextSibling);
+    setCaretAfter(nodes[nodes.length - 1]);
     return edited();
   }
   r.deleteContents();
@@ -920,7 +967,7 @@ const COMMANDS = {
   h4: () => blockCommand((b) => setBlockName(b, 'h4')),
   h5: () => blockCommand((b) => setBlockName(b, 'h5')),
   h6: () => blockCommand((b) => setBlockName(b, 'h6')),
-  ul: () => blockCommand((b) => (b.nodeName === 'LI' ? toggleList(b, 'ul') : toggleList(b, 'ul'))),
+  ul: () => blockCommand((b) => toggleList(b, 'ul')),
   ol: () => blockCommand((b) => toggleList(b, 'ol')),
   blockquote: () => blockCommand((b) => toggleBlockquote(b)),
   pre: () => blockCommand((b) => toPre(b)),
@@ -973,7 +1020,6 @@ async function openFile() {
 
 // ---------------------------------------------------------------------- status
 
-let openThreads = 0;
 function refresh() {
   const { root } = liveTree();
   const body = root.children[0];
@@ -984,18 +1030,16 @@ function refresh() {
   $('#st-sel').textContent = path;
   $('#st-cli').textContent = `neodoc get ${state.name} '${path}'`;
   const threads = renderThreads();
-  openThreads = threads.filter((t) => t.state !== 'resolved').length;
-  $('#st-comments').textContent = `${openThreads} comments`;
-  $('#st-state').dataset.dirty = String(state.dirty);
-  if (state.dirty && !/^(saved|opened|no file)/.test($('#st-state').textContent)) {
-    $('#st-state').textContent = `unsaved changes in ${state.name}`;
-  }
+  $('#st-comments').textContent = `${threads.filter((t) => t.state !== 'resolved').length} comments`;
+  $('#st-dirty').textContent = state.dirty ? 'unsaved' : 'saved';
+  $('#st-dirty').dataset.dirty = String(state.dirty);
 }
 
 // ------------------------------------------------------------------------ wire
 
-document.getElementById('toolbar').addEventListener('mousedown', (e) => {
-  if (e.target.closest('button')) e.preventDefault(); // keep the selection in the document
+// Buttons must not steal the selection from the document.
+$('#chrome').addEventListener('mousedown', (e) => {
+  if (e.target.closest('button')) e.preventDefault();
 });
 $('#chrome').addEventListener('click', (e) => {
   const btn = e.target.closest('button[data-cmd]');
@@ -1066,6 +1110,7 @@ document.addEventListener('drop', async (e) => {
 
 // ------------------------------------------------------------------------ boot
 
+sweepEditorNodes();
 if (!(await loadServed())) {
   status('no file open — Open a .nd.html file, or run neodoc serve');
 }

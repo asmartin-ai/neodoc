@@ -108,8 +108,11 @@ test('blocks map to heading, normal, quote and fixed-spacing code paragraphs', a
   assert.match(doc, /<w:t>if \(x\) \{<\/w:t>/);
   // Relative indentation inside a code block survives as leading spaces.
   assert.match(doc, /<w:t xml:space="preserve">    y\(\);<\/w:t>/);
-  assert.match(text(files.get('word/styles.xml')), /w:styleId="NeodocCode"/);
-  assert.match(text(files.get('word/styles.xml')), /ascii="Consolas"/);
+  const styles = text(files.get('word/styles.xml'));
+  assert.match(styles, /w:styleId="NeodocCode"/);
+  assert.match(styles, /ascii="Consolas"/);
+  // Normal is the document default: it must not be based on itself.
+  assert.match(styles, /w:default="1" w:styleId="Normal"><w:name w:val="Normal"\/><w:qFormat\/>/);
 });
 
 test('inline elements map to the documented run properties', async () => {
@@ -143,15 +146,33 @@ test('a 2×2 table produces four bounded cells with an aligned, shaded header', 
   assert.match(doc, /<w:rPr><w:b\/><\/w:rPr>/);
 });
 
-test('lists use real numbering, with the item text kept', async () => {
-  const doc = text(unzip(await toDocx(body(
-    '<ul><li>one</li><li>two</li></ul><ol><li>first</li></ol>',
-  ))).get('word/document.xml'));
-  assert.equal((doc.match(/<w:numId w:val="1"\/>/g) || []).length, 2);
+test('lists use real numbering, one instance per ordered list', async () => {
+  const files = unzip(await toDocx(body(
+    '<ul><li>one</li><li>two</li><li>parent<ul><li>nested</li></ul></li></ul>'
+    + '<ol><li>first</li></ol><ol><li>second</li></ol>',
+  )));
+  const doc = text(files.get('word/document.xml'));
+  // Bullets all share numId 1; the two ordered lists must not share a sequence.
+  assert.equal((doc.match(/<w:numId w:val="1"\/>/g) || []).length, 4);
   assert.equal((doc.match(/<w:numId w:val="2"\/>/g) || []).length, 1);
-  assert.match(doc, /<w:ilvl w:val="0"\/>/);
+  assert.equal((doc.match(/<w:numId w:val="3"\/>/g) || []).length, 1);
+  assert.match(doc, /<w:ilvl w:val="1"\/>/);   // the nested bullet list
   assert.match(doc, /<w:t>one<\/w:t>/);
-  assert.match(doc, /<w:t>first<\/w:t>/);
+  assert.match(doc, /<w:t>second<\/w:t>/);
+  const numbering = text(files.get('word/numbering.xml'));
+  for (const id of [1, 2, 3]) assert.match(numbering, new RegExp(`<w:num w:numId="${id}"><w:abstractNumId w:val="${id === 1 ? 0 : 1}"/>`));
+  assert.equal((numbering.match(/<w:abstractNum /g) || []).length, 2);
+});
+
+test('hr, sections and task items map to their own block forms', async () => {
+  const doc = text(unzip(await toDocx(body(
+    '<hr><section data-title="Appendix"><p>x</p></section>'
+    + '<ul><li data-checked="true">done</li><li data-checked="false">todo</li></ul>',
+  ))).get('word/document.xml'));
+  assert.match(doc, /<w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="auto"\/><\/w:pBdr>/);
+  assert.match(doc, /<w:t xml:space="preserve">\u2611 <\/w:t>/);
+  assert.match(doc, /<w:t xml:space="preserve">\u2610 <\/w:t>/);
+  assert.match(doc, /<w:t>x<\/w:t>/); // a section is transparent: its blocks stay
 });
 
 test('a mark with a thread becomes a real comment; replies stay in its body', async () => {
@@ -199,7 +220,8 @@ test('ins and del become tracked changes with author, date and delText', async (
 test('links become hyperlink runs backed by an external relationship', async () => {
   const files = unzip(await toDocx(body('<p>see <a href="https://example.com/a?b=1&amp;c=2">docs</a></p>')));
   const doc = text(files.get('word/document.xml'));
-  assert.match(doc, /<w:hyperlink r:id="rId4"><w:r><w:t>docs<\/w:t><\/w:r><\/w:hyperlink>/);
+  assert.match(doc, /<w:hyperlink r:id="rId4"><w:r><w:rPr><w:rStyle w:val="Hyperlink"\/><\/w:rPr><w:t>docs<\/w:t><\/w:r><\/w:hyperlink>/);
+  assert.match(text(files.get('word/styles.xml')), /w:styleId="Hyperlink"/);
   assert.match(text(files.get('word/_rels/document.xml.rels')),
     /Id="rId4" Type="[^"]*\/hyperlink" Target="https:\/\/example\.com\/a\?b=1&amp;c=2" TargetMode="External"/);
 });

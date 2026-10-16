@@ -47,6 +47,7 @@ const collapse = (s) => String(s).replace(/[ \t\r\n\f\v]+/g, ' ');
 // tolerant but strict validators are not, and `<em><strong>` would otherwise
 // produce `<w:i/><w:b/>`.
 const RP_ORDER = [
+  (s) => (s.rs ? `<w:rStyle w:val="${s.rs}"/>` : ''),
   (s) => (s.mono ? '<w:rFonts w:ascii="Consolas" w:hAnsi="Consolas" w:cs="Consolas"/>' : ''),
   (s) => (s.b ? '<w:b/>' : ''),
   (s) => (s.i ? '<w:i/>' : ''),
@@ -115,7 +116,7 @@ function inlineNode(n, ctx, st) {
     const href = n.attrs.href;
     if (!href) return kids();
     const id = ctx.rel(`${R}/hyperlink`, href, 'External');
-    return `<w:hyperlink r:id="${id}">${kids()}</w:hyperlink>`;
+    return `<w:hyperlink r:id="${id}">${inlines(n.children || [], ctx, { ...st, rs: 'Hyperlink' })}</w:hyperlink>`;
   }
   if (name === 'img') return imageRun(n, ctx);
   if (name === 'ins' || name === 'del') {
@@ -260,8 +261,11 @@ function codeBlock(node) {
   return lines.map((l) => para({ style: 'NeodocCode' }, l === '' ? '' : run(l))).join('');
 }
 
-function list(node, ctx, ordered, ilvl) {
-  const numId = ordered ? 2 : 1;
+function list(node, ctx, ordered, ilvl, numId) {
+  // Each ordered list gets its own `w:num` instance: Word continues the count of
+  // any other list that shares a numId, so separate `<ol>`s must not share one.
+  // numId 1 is always the bullet list, defined in numberingXml.
+  if (!numId) numId = ordered ? ++ctx.numSeq : 1;
   let out = '';
   for (const li of (node.children || []).filter((c) => isEl(c, 'li'))) {
     const inlineKids = [];
@@ -276,11 +280,13 @@ function list(node, ctx, ordered, ilvl) {
     else if (checked === 'false') marker = run('\u2610 ');
     out += para({ num: { numId, ilvl } }, marker + inlines(trimInline(inlineKids), ctx));
     for (const b of blockKids) {
-      // Nested blocks carry the parent's indent level only through their own
-      // numbering; other block types simply follow without a bullet.
-      out += b.name === 'ul' || b.name === 'ol'
-        ? list(b, ctx, b.name === 'ol', ilvl + 1)
-        : blocks([b], ctx, null);
+      if (b.name === 'ul' || b.name === 'ol') {
+        // A nested ordered list continues its parent's count one level deeper;
+        // any other nested list starts a fresh numbering instance.
+        out += list(b, ctx, b.name === 'ol', ilvl + 1, ordered && b.name === 'ol' ? numId : 0);
+      } else {
+        out += blocks([b], ctx, null);
+      }
     }
   }
   return out;
@@ -505,10 +511,12 @@ async function zip(parts) {
 
 // ------------------------------------------------------------- fixed OOXML parts
 
+// `basedOn: null` means "no parent" (Normal itself, and character styles, which
+// cannot inherit from a paragraph style).
 const styleDef = (id, name, opts = {}) =>
   `<w:style w:type="${opts.type || 'paragraph'}"${opts.default ? ' w:default="1"' : ''} w:styleId="${id}">`
   + `<w:name w:val="${name}"/>`
-  + (opts.type === 'character' ? '' : '<w:basedOn w:val="Normal"/>')
+  + (opts.basedOn === null ? '' : `<w:basedOn w:val="${opts.basedOn || 'Normal'}"/>`)
   + (opts.next ? `<w:next w:val="${opts.next}"/>` : '')
   + '<w:qFormat/>' + (opts.pPr || '') + (opts.rPr ? `<w:rPr>${opts.rPr}</w:rPr>` : '')
   + '</w:style>';
@@ -529,7 +537,7 @@ function stylesXml(lang) {
     + `<w:sz w:val="22"/><w:szCs w:val="22"/><w:lang w:val="${escA(lang)}"/></w:rPr></w:rPrDefault>`
     + '<w:pPrDefault><w:pPr><w:spacing w:after="160" w:line="259" w:lineRule="auto"/></w:pPr></w:pPrDefault>'
     + '</w:docDefaults>'
-    + styleDef('Normal', 'Normal', { default: true })
+    + styleDef('Normal', 'Normal', { default: true, basedOn: null })
     + [1, 2, 3, 4, 5, 6].map(heading).join('')
     + styleDef('Quote', 'Quote', {
       next: 'Normal',
@@ -543,15 +551,15 @@ function stylesXml(lang) {
     })
     + styleDef('CommentText', 'annotation text', { rPr: '<w:sz w:val="20"/><w:szCs w:val="20"/>' })
     + styleDef('CommentReference', 'annotation reference', {
-      type: 'character', rPr: '<w:sz w:val="16"/><w:szCs w:val="16"/><w:vertAlign w:val="superscript"/>',
+      type: 'character', basedOn: null, rPr: '<w:sz w:val="16"/><w:szCs w:val="16"/><w:vertAlign w:val="superscript"/>',
     })
     + styleDef('Hyperlink', 'Hyperlink', {
-      type: 'character', rPr: '<w:color w:val="0563C1"/><w:u w:val="single"/>',
+      type: 'character', basedOn: null, rPr: '<w:color w:val="0563C1"/><w:u w:val="single"/>',
     })
     + '</w:styles>';
 }
 
-function numberingXml() {
+function numberingXml(count) {
   const lvl = (ilvl, numFmt, text) =>
     `<w:lvl w:ilvl="${ilvl}"><w:start w:val="1"/><w:numFmt w:val="${numFmt}"/>`
     + `<w:lvlText w:val="${text}"/><w:lvlJc w:val="left"/>`
@@ -559,11 +567,14 @@ function numberingXml() {
   const abstract = (id, fmt, texts) =>
     `<w:abstractNum w:abstractNumId="${id}"><w:multiLevelType w:val="hybridMultilevel"/>`
     + texts.map((t, i) => lvl(i, fmt, t)).join('') + '</w:abstractNum>';
+  // `w:num` instances are per list, so that two separate lists do not share a
+  // counting sequence: numId 1 is the bullet list, 2..count are ordered lists.
+  const nums = Array.from({ length: count }, (_, i) =>
+    `<w:num w:numId="${i + 1}"><w:abstractNumId w:val="${i === 0 ? 0 : 1}"/></w:num>`).join('');
   return XML_DECL + `<w:numbering xmlns:w="${W}">`
     + abstract(0, 'bullet', ['\u2022', '\u25cb', '\u25aa'])
     + abstract(1, 'decimal', ['%1.', '%2.', '%3.'])
-    + '<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>'
-    + '<w:num w:numId="2"><w:abstractNumId w:val="1"/></w:num>'
+    + nums
     + '</w:numbering>';
 }
 
@@ -646,6 +657,7 @@ function makeContext(opts) {
     consumedAsides: new Set(),
     changes: 0,
     draws: 0,
+    numSeq: 1,               // highest `w:num` instance allocated (1 = bullets)
     warn(message) { if (Array.isArray(opts.warnings)) opts.warnings.push(message); },
   };
   ctx.commentId = (cid) => {
@@ -686,17 +698,14 @@ function* walkAll(node) {
 export async function toDocx(bodyNode, opts = {}) {
   const ctx = makeContext(opts);
   // Comments must be known before the body is walked (an `<aside>` may precede
-  // the `<mark data-c>` it answers), and an anchored aside is moved out of the
-  // flow into comments.xml. Anchored threads are collected in document order
-  // over the whole body, so an aside is never mistaken for a nested one.
+  // the `<mark data-c>` it answers), and an anchored aside moves out of the flow
+  // into comments.xml. One pass collects anchors and threads over the whole body.
   for (const node of walkAll(bodyNode || { children: [] })) {
     if (isEl(node, 'mark') && node.attrs['data-c']) ctx.marks.add(node.attrs['data-c']);
+    else if (isEl(node, 'aside') && node.attrs['data-thread']) ctx.comments.set(node.attrs['data-thread'], node);
   }
-  for (const node of walkAll(bodyNode || { children: [] })) {
-    if (!isEl(node, 'aside')) continue;
-    const cid = node.attrs['data-thread'];
-    if (cid && ctx.marks.has(cid)) ctx.consumedAsides.add(node);
-    if (cid) ctx.comments.set(cid, node);
+  for (const [cid, aside] of ctx.comments) {
+    if (ctx.marks.has(cid)) ctx.consumedAsides.add(aside);
   }
   const body = blocks(bodyChildren(bodyNode), ctx, null);
   const commentsXmlPart = [...ctx.commentBodies.values()]
@@ -728,7 +737,7 @@ export async function toDocx(bodyNode, opts = {}) {
     { name: 'docProps/app.xml', data: enc.encode(appXml()) },
     { name: 'word/document.xml', data: enc.encode(document) },
     { name: 'word/styles.xml', data: enc.encode(stylesXml(opts.lang || 'en')) },
-    { name: 'word/numbering.xml', data: enc.encode(numberingXml()) },
+    { name: 'word/numbering.xml', data: enc.encode(numberingXml(ctx.numSeq)) },
     { name: 'word/settings.xml', data: enc.encode(settingsXml()) },
     { name: 'word/_rels/document.xml.rels', data: enc.encode(relsXml(docRels)) },
   ];

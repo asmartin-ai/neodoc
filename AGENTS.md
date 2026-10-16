@@ -28,7 +28,14 @@ node --test test/format.test.js       # one file
 node bin/neodoc.js fmt -w doc.nd.html
 node bin/neodoc.js lint doc.nd.html
 node --test test/bench.test.js        # performance budget (SPEC §9)
+node tools/bundle.js                  # regenerate editor/neodoc-editor.html
+node tools/bundle.js --check          # fails if that generated page is stale
 ```
+
+`editor/neodoc-editor.html` is generated from `editor/editor.js` + its `src/*.js`
+import closure. Edit the modules, then rebuild; never edit the generated page. It
+exists so the editor runs from a `file://` URL with no server and no network, which
+is why it is one inline module script with no imports of its own.
 
 Run the whole suite once at the end of a change, not in a loop. There is no
 watch mode and no repo-wide formatter; `neodoc fmt` is the formatter.

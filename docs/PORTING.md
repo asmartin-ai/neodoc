@@ -20,7 +20,7 @@ it agrees with the corpus in `fixtures/` and with the rules below.
 Any implementation can be validated without reading our code:
 
 ```bash
-neodoc conformance fixtures/      # one PASS/FAIL line per case, exit 1 on failure
+neodoc test fixtures/      # one PASS/FAIL line per case, exit 1 on failure
 ```
 
 1. Every `fixtures/*.nd.html` is already canonical: `format(text) === text`,

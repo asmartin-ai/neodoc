@@ -119,20 +119,19 @@ export function clone(node) {
   return copy;
 }
 
-/** Local name of a selector-matching element path, e.g. `body > section:nth-child(2) > h2`. */
+/** Round-trippable selector for `node` under `root`, e.g. `body > p:nth-of-type(1)`. */
 export function pathOf(root, target) {
   const parts = [];
   let node = target;
   while (node && node !== root) {
-    const parent = parentOf(root, node);
+    const parent = (root.children || []).includes(node) ? root : parentOf(root, node);
     if (!parent) break;
-    const sibs = (parent.children || []).filter((c) => isEl(c));
-    const sameTag = sibs.filter((c) => c.name === node.name);
+    const sameTag = (parent.children || []).filter((c) => isEl(c) && c.name === node.name);
     let seg = node.name;
+    // A tag that occurs once among its siblings needs no positional suffix, so
+    // `body` stays `body`; only genuinely ambiguous siblings get indexed.
     if (node.attrs && node.attrs.id) seg += `#${node.attrs.id}`;
-    else if (sibs.length > 1) {
-      seg += sameTag.length > 1 ? `:nth-of-type(${sameTag.indexOf(node) + 1})` : `:nth-child(${sibs.indexOf(node) + 1})`;
-    }
+    else if (sameTag.length > 1) seg += `:nth-of-type(${sameTag.indexOf(node) + 1})`;
     parts.unshift(seg);
     node = parent;
   }

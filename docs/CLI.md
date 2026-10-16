@@ -34,10 +34,10 @@ neodoc get report.nd.html 'section#s2 > p' --json
 neodoc set report.nd.html 'h1' --md '# New title'
 neodoc set report.nd.html 'body > p:nth-child(4)' --html '<p>Replaced</p>'
 neodoc set report.nd.html 'aside[data-thread="c1"]' --file note.html
-neodoc insert report.nd.html --after 'h1' --md 'Intro paragraph.'
-neodoc insert report.nd.html --append-to 'section#s2' --md '- a
+neodoc add report.nd.html --after 'h1' --md 'Intro paragraph.'
+neodoc add report.nd.html --into 'section#s2' --md '- a
 - b'
-neodoc insert report.nd.html --before 'body > p' --file - --md < notes.md
+neodoc add report.nd.html --before 'body > p' --file - --md < notes.md
 neodoc rm report.nd.html 'body > aside[data-state="resolved"]'
 neodoc id report.nd.html --for 'body > section:nth-child(2)' --as intro
 ```
@@ -64,17 +64,17 @@ all matches. Content flags: `--md S`, `--html S`, `--file F` (HTML from a file),
 ## Comments and tracked changes
 
 ```bash
-neodoc comment add report.nd.html 'body > p:nth-child(2)' \
-    --quote 'churn figure' --body 'Source?' --author ada
-neodoc comment add report.nd.html 'body > h2' --body 'Section-level note'   # no --quote: whole block
-neodoc comment list report.nd.html --state open
-neodoc comment list report.nd.html --json
-neodoc comment reply report.nd.html c1 --body 'Appendix B.' --author ken
-neodoc comment resolve report.nd.html c1
-neodoc comment reopen  report.nd.html c1
-neodoc comment rm      report.nd.html c1
-neodoc track accept report.nd.html              # fold <ins> in, drop <del>
-neodoc track reject report.nd.html 'body > p'   # drop <ins>, keep <del> content
+neodoc note add report.nd.html 'body > p:nth-child(2)' \
+    --on 'churn figure' --say 'Source?' --by ada
+neodoc note add report.nd.html 'body > h2' --say 'Section-level note'   # no --on: whole block
+neodoc note ls report.nd.html --open
+neodoc note ls report.nd.html --json
+neodoc note reply report.nd.html c1 --say 'Appendix B.' --by ken
+neodoc note done report.nd.html c1
+neodoc note undo report.nd.html c1
+neodoc note rm   report.nd.html c1
+neodoc accept report.nd.html              # fold <ins> in, drop <del>
+neodoc reject report.nd.html 'body > p'   # drop <ins>, keep <del> content
 ```
 
 Wrapped text stays in place: `<mark data-c="c1">churn figure</mark>`, with the
@@ -84,11 +84,11 @@ thread in a neighbouring `<aside data-thread="c1" data-state="open">`. See SPEC 
 
 ```bash
 neodoc import notes.md -o notes.nd.html        # markdown (or `-`) → neodoc
-neodoc to md report.nd.html                    # → report.md, GFM
-neodoc to md report.nd.html --comments critic  # CriticMarkup comments
-neodoc to md report.nd.html --comments drop    # strip comments
-neodoc to md report.nd.html -o -
-neodoc to docx report.nd.html                  # → report.docx (media embedded)
+neodoc md report.nd.html                    # → report.md, GFM
+neodoc md report.nd.html --comments critic  # CriticMarkup comments
+neodoc md report.nd.html --comments drop    # strip comments
+neodoc md report.nd.html -o -
+neodoc docx report.nd.html                  # → report.docx (media embedded)
 ```
 
 `--comments`: `html` (default — nothing is lost), `critic`, `drop`.
@@ -98,13 +98,17 @@ from `data:` URIs or paths relative to the document.
 ## Rendering
 
 ```bash
-neodoc serve report.nd.html --open             # edit + save loop, http://127.0.0.1:8765
-python3 -m http.server                         # or just host the file statically
+open editor/neodoc-editor.html                 # edit WYSIWYG: no server, works offline
+python3 -m http.server                         # or host the document statically
+neodoc serve report.nd.html --open             # optional: in-place save + live reload
 ```
 
-The document itself needs no server: opening the file renders it. `serve` binds to
-`127.0.0.1` only and adds `GET /doc` (the raw text + style mode) and
-`POST /save?path=<name>` for the editor's save loop.
+The document needs no server to render, and neither does the editor: the page keeps
+`editor.js` and its `src/*.js` imports until you want a server; `tools/bundle.js`
+inlines them so `editor/neodoc-editor.html` runs from `file://` offline. Use
+`neodoc serve` only for the conveniences it adds — saving in place in browsers
+without the File System Access API, and the `GET /doc` + `POST /save?path=<name>`
+pair the editor auto-detects. It binds to `127.0.0.1` only.
 
 ## Performance
 

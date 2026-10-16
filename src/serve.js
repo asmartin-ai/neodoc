@@ -5,7 +5,7 @@
 import { createServer } from 'node:http';
 import { readFile, writeFile, rename } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
-import { extname, resolve, sep } from 'node:path';
+import { dirname, extname, join, resolve, sep } from 'node:path';
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -23,7 +23,8 @@ const TYPES = {
 
 export function serve({ file, port = 8765, open = false }) {
   const root = process.cwd();
-  const server = createServer((req, res) => handle(req, res, { root, file }));
+  const assets = new URL('..', import.meta.url).pathname; // the neodoc install (editor/, src/)
+  const server = createServer((req, res) => handle(req, res, { root, assets, file }));
   return new Promise((ok, no) => {
     server.on('error', no);
     server.listen(port, '127.0.0.1', () => {
@@ -41,7 +42,10 @@ async function handle(req, res, ctx) {
     if (url.pathname === '/doc') return await doc(req, res, ctx);
     if (url.pathname === '/save' && req.method === 'POST') return await save(req, res, ctx);
     const rel = url.pathname === '/' ? '/editor/index.html' : url.pathname;
-    const path = safeJoin(ctx.root, rel);
+    // editor/ and src/ come from the neodoc install; everything else is relative
+    // to the served document so a doc's own images and attachments work.
+    const base = /^\/(editor|src)\//.test(rel) ? ctx.assets : dirname(ctx.file ?? join(ctx.root, 'x'));
+    const path = safeJoin(base, rel);
     if (!path) return send(res, 403, 'outside project');
     const body = await readFile(path);
     res.writeHead(200, { 'content-type': TYPES[extname(path).toLowerCase()] ?? 'application/octet-stream' });
@@ -76,8 +80,9 @@ async function save(req, res, ctx) {
 }
 
 function safeJoin(root, rel) {
-  const path = resolve(root, `.${rel.startsWith('/') ? rel : `/${rel}`}`);
-  return path === root || path.startsWith(root + sep) ? path : null;
+  const base = resolve(root);
+  const path = resolve(base, `.${rel.startsWith('/') ? rel : `/${rel}`}`);
+  return path === base || path.startsWith(base + sep) ? path : null;
 }
 
 function send(res, code, body, headers = {}) {

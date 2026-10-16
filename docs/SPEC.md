@@ -169,7 +169,7 @@ of the containing `section`, else end of `body`):
   block; `del` is red strikethrough, `ins` is green underline.
 
 Tracked changes use native HTML: `<ins data-author="ada" data-at="…">added</ins>`
-and `<del …>removed</del>`. `neodoc track accept|reject` folds them.
+and `<del …>removed</del>`. `neodoc accept` / `neodoc reject` folds them.
 
 ## 6. Canonical stylesheet
 
@@ -205,18 +205,19 @@ neodoc fmt [-w] [--check] [--style=inline|none] FILE...
 neodoc lint [--json] [--fix] FILE...
 neodoc get FILE SELECTOR [--json] [--text]
 neodoc set FILE SELECTOR (--md S | --html S | --file F | --stdin)
-neodoc insert FILE (--before|--after|--append-to) SELECTOR (--md S | --html S | --file F)
+neodoc add FILE (--before SEL | --after SEL | --into SEL) (--md S | --html S | --file F | --stdin)
 neodoc rm FILE SELECTOR
 neodoc new [FILE] [--title T] [--stdin]
 neodoc id FILE --for SELECTOR --as NAME
-neodoc comment add FILE SELECTOR --body T [--quote S] [--author A] [--at TS]
-neodoc comment list FILE [--json] [--state open|resolved|all]
-neodoc comment reply FILE ID --body T
-neodoc comment resolve|reopen|rm FILE ID
-neodoc track accept|reject FILE [SELECTOR]
+neodoc note add FILE SELECTOR --say T [--on QUOTE] [--by AUTHOR] [--at TS]
+neodoc note ls FILE [--json] [--open | --done]
+neodoc note reply FILE ID --say T
+neodoc note done|undo|rm FILE ID
+neodoc accept FILE [SELECTOR]
+neodoc reject FILE [SELECTOR]
 neodoc import [FILE.md] [-o OUT]
-neodoc to md FILE [-o OUT] [--comments html|critic|drop]
-neodoc to docx FILE [-o OUT]
+neodoc md FILE [-o OUT] [--comments html|critic|drop]
+neodoc docx FILE [-o OUT]
 neodoc serve FILE [--port N] [--open]
 neodoc bench FILE [--rounds N]
 neodoc css
@@ -263,7 +264,7 @@ A conforming implementation MUST: `fmt` a canonical file to byte-identical outpu
 report forbidden elements as lint errors; keep every unknown construct in the file
 while reporting it; and round-trip a document through markdown without losing text.
 
-`neodoc conformance fixtures/` is the runnable check:
+`neodoc test fixtures/` is the runnable check:
 
 1. every `fixtures/*.nd.html` is already canonical (`fmt` returns the same bytes)
    and lints with zero findings;

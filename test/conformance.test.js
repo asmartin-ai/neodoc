@@ -5,6 +5,9 @@ import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { format } from '../src/format.js';
 import { lint } from '../src/lint.js';
+import { parse } from '../src/parse.js';
+import { queryAll } from '../src/select.js';
+import { descendants, pathOf } from '../src/tree.js';
 
 const DIR = new URL('../fixtures/', import.meta.url).pathname;
 const hasStyle = (text) => /<style[\s>]/i.test(text);
@@ -28,5 +31,23 @@ test('non-canonical inputs converge on the canonical fixture', () => {
     const want = read(target);
     const got = format(read(join(ncDir, name)), { style: hasStyle(want) ? 'inline' : 'none' }).text;
     assert.equal(got, want, `${name} did not canonicalize to ${target}`);
+  }
+});
+
+// `neodoc get --json` hands agents a `path` they can feed straight back in, so
+// every generated path must resolve to exactly the node it came from.
+test('generated paths resolve to exactly one node', () => {
+  for (const name of readdirSync(DIR).filter((f) => f.endsWith('.nd.html')).sort()) {
+    const { root } = parse(read(join(DIR, name)));
+    let checked = 0;
+    for (const node of descendants(root)) {
+      if (node.type !== 'element' || node.name === '#root') continue;
+      const path = pathOf(root, node);
+      const hits = queryAll(root, path);
+      assert.equal(hits.length, 1, `${name}: ${path} matched ${hits.length} nodes`);
+      assert.equal(hits[0].node, node, `${name}: ${path} resolved to a different node`);
+      checked++;
+    }
+    assert.ok(checked > 10, `${name}: only ${checked} elements checked`);
   }
 });

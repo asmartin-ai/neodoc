@@ -50,8 +50,8 @@
   pointer-events: auto; font-size: 12px; overflow: hidden;
 }
 #statusbar > span { white-space: nowrap; }
-#statusbar #st-state { font-weight: 600; }
-#statusbar #st-state[data-dirty="true"] { color: #a2450b; }
+#statusbar #st-state { color: #444; }
+#statusbar #st-dirty[data-dirty="true"] { color: #a2450b; font-weight: 600; }
 #statusbar #st-sel { color: #444; font-family: ui-monospace, monospace; }
 #statusbar #st-cli {
   flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

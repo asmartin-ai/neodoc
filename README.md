@@ -35,11 +35,11 @@ edit from the command line by CSS selector.
 
 ```bash
 neodoc new report.nd.html --title "Quarterly report"   # create
-neodoc serve report.nd.html --open                     # edit in the browser
+open editor/neodoc-editor.html                         # WYSIWYG edit, no server
 neodoc get report.nd.html 'body > p:nth-child(2)' --json
 neodoc set report.nd.html 'h1' --md '# Introduction'
-neodoc comment add report.nd.html 'body > p' --quote 'churn figure' --body 'Source?'
-neodoc lint report.nd.html && neodoc to md report.nd.html && neodoc to docx report.nd.html
+neodoc note add report.nd.html 'body > p' --on 'churn figure' --say 'Source?'
+neodoc lint report.nd.html && neodoc md report.nd.html && neodoc docx report.nd.html
 ```
 
 No dependencies, no build step: `node bin/neodoc.js …` (Node ≥ 20, Bun, or a
@@ -74,15 +74,15 @@ contract is [docs/SPEC.md](docs/SPEC.md). The short version:
 | Surface | How |
 |---|---|
 | **Read** | Open the `.nd.html` file in any browser, or host it anywhere statically. Print it: the stylesheet has `@page`, `break-inside`, `orphans`/`widows` rules. |
-| **Edit (human)** | `neodoc serve FILE --open` → inline WYSIWYG editing (`# `, `**bold**`, `- item`, tables, paste sanitized through the format), comment sidebar, suggest mode, `Cmd+S` writes canonical bytes. `editor/index.html` also works opened directly, or hosted online. |
+| **Edit (human)** | Open `editor/neodoc-editor.html` from anywhere — no server, no network, works offline from `file://`. Inline WYSIWYG editing (`# `, `**bold**`, `- item`, tables, paste sanitized through the format), comment sidebar, suggest mode; `Cmd+S` writes canonical bytes through the browser's file handle, or downloads the file. Hosted or `neodoc serve FILE --open` (optional) adds in-place saving everywhere. |
 | **Edit (agent/script)** | `neodoc get/set/insert/rm/comment/track` with CSS selectors and `--json`. Same selectors in every command; `get --json` hands back a round-trippable path. |
 
 ## Converting
 
 ```bash
 neodoc import notes.md -o notes.nd.html   # markdown → neodoc
-neodoc to md report.nd.html -o report.md  # comments → HTML (default), critic markup, or dropped
-neodoc to docx report.nd.html             # real Word comments + tracked changes + embedded media
+neodoc md report.nd.html -o report.md  # comments → HTML (default), critic markup, or dropped
+neodoc docx report.nd.html             # real Word comments + tracked changes + embedded media
 ```
 
 docx is **export-only** on purpose: importing docx is a lossy one-way door
@@ -102,13 +102,31 @@ src/docx.js       OOXML writer (web-standard APIs only)
 src/tree.js       node model, vocabulary, addressing helpers
 src/theme.js      the canonical stylesheet
 src/cli.js        command dispatch
-src/serve.js      local server for the editor's save loop
-editor/           the browser editor (no dependencies)
+src/serve.js      optional local server (in-place save, live reload)
+editor/editor.js  the browser editor, as modules
+editor/neodoc-editor.html  generated: the same editor, one self-contained page
+tools/bundle.js   builds that page (node tools/bundle.js)
 docs/SPEC.md      normative format spec
 docs/CLI.md       command reference
 docs/PRIOR-ART.md what was tried before and how it failed
 docs/PORTING.md   how to write a Neodoc implementation in another language
 ```
+
+## No server
+
+Nothing in Neodoc requires a server:
+
+- **Reading**: the document is valid HTML; open it, host it statically, or email it.
+- **Editing**: `editor/neodoc-editor.html` is one self-contained page (the modules are
+  bundled into an inline module script by `tools/bundle.js`), so it works from a
+  `file://` URL with no network. It reads your document through the browser's file
+  picker or a drag-and-drop, and writes it back through the File System Access API
+  where the browser has it, otherwise as a download.
+- **Agents and scripts**: `neodoc get/set/add/…` are a local process, not a service.
+
+`neodoc serve FILE` is optional convenience — in-place saving in browsers without the
+File System Access API, live reload while editing, and an HTTP `/doc` + `/save` pair
+the editor auto-detects. It binds to `127.0.0.1` only.
 
 ## Non-goals
 

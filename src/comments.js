@@ -8,7 +8,7 @@
 // ponytail: a quote must sit inside a single text node — matching does not span
 // inline markup; upgrade when someone quotes across `<strong>` boundaries.
 
-import { descendants, el, isEl, pathOf, textOf, txt, walk } from './tree.js';
+import { descendants, el, hasBlockChild, isEl, pathOf, textOf, txt, walk } from './tree.js';
 import { query, queryAll } from './select.js';
 
 const has = (obj, key) => Object.prototype.hasOwnProperty.call(obj || {}, key);
@@ -118,6 +118,11 @@ export function addComment(tree, { body, selector, quote, text, author, at } = {
   if (quote) {
     mark = wrapQuote(block, quote, id);
     if (!mark) throw new Error(`quote not found in the block matched by "${selector}": ${quote}`);
+  } else if (hasBlockChild(block.children)) {
+    // An inline <mark> cannot legally wrap block children (a <ul>, a table, a
+    // section), so a note on a container block is anchored to the container
+    // itself: thread only, no mark.
+    mark = null;
   } else {
     mark = el('mark', { 'data-c': id }, block.children || []);
     block.children = [mark];

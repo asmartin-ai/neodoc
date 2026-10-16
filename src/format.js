@@ -147,7 +147,7 @@ export function normalizePre(text) {
 
 // ------------------------------------------------------------------- head/body
 
-function normalizeDocument(root, warnings, opts) {
+export function normalizeDocument(root, warnings = [], opts = {}) {
   const found = root.children.find((c) => c.type === 'element' && c.name === 'html');
   const loose = root.children.filter((c) => c !== found && c.type !== 'doctype');
   const looseHead = loose.find((c) => c.name === 'head');
@@ -181,9 +181,19 @@ function normalizeHead(children, warnings, opts) {
   const metas = [];
   let title = null;
   for (const child of children) {
-    if (child.name === 'title' && !title) title = child;
-    else if (child.name === 'meta' && child.attrs.name && child.attrs.name !== 'generator') metas.push(child);
-    else if (!(child.name === 'meta' && child.attrs.charset)) {
+    if (child.name === 'title') {
+      if (title) warnings.push('dropped duplicate <title>');
+      else title = child;
+    } else if (child.name === 'meta') {
+      const { name, charset } = child.attrs;
+      if (name === 'generator' || charset) continue; // canonical forms, re-emitted below
+      if (name) metas.push(child);
+      else warnings.push('dropped <meta> without a name or charset');
+    } else if (child.name === 'style') {
+      if (opts.style !== 'none' && String(child.children?.[0]?.text ?? '').trim() !== THEME_CSS.trim()) {
+        warnings.push('replaced the <style> block with the canonical stylesheet');
+      }
+    } else {
       warnings.push(`dropped <${child.name}> from <head>`);
     }
   }

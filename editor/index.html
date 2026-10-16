@@ -3,22 +3,18 @@
 <head>
 <meta charset="utf-8">
 <title>Neodoc editor</title>
-<!--
-  The editor's own stylesheet. It is an editor asset: editor.js keeps it out of
-  the canonical file (it is detached while src/format.js runs, see canonicalText).
-  The document's own <style> block arrives from the file and is re-inserted before
-  this link, so the document keeps rendering with its own theme.
--->
 <link id="editor-css" rel="stylesheet" href="editor.css">
 </head>
-<!--
-  The body IS the document: its children are the document's blocks, and its
-  children are what src/format.js canonicalizes on save. #chrome is the only
-  editor-owned element in here and is detached during canonicalization.
--->
 <body contenteditable="true" spellcheck="false">
 <p></p>
 <div id="chrome" contenteditable="false">
+  <!--
+    The body IS the document: its children are the document's blocks and are what
+    src/format.js canonicalizes on save. #chrome is the only editor-owned element
+    in here and is detached while format() runs; every comment inside it is safe
+    because this element never reaches the file. Comments anywhere else in this
+    page do: the HTML parser moves them into the body, where format() keeps them.
+  -->
   <div id="toolbar" role="toolbar" aria-label="Document commands">
     <button type="button" data-cmd="open" aria-label="Open file">Open</button>
     <button type="button" data-cmd="save" aria-label="Save file">Save</button>
@@ -56,6 +52,7 @@
   </aside>
 
   <div id="statusbar">
+    <span id="st-dirty" data-dirty="false">saved</span>
     <span id="st-state">no file open</span>
     <span id="st-blocks">0 blocks</span>
     <span id="st-sel">body</span>

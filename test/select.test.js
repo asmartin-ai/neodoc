@@ -143,13 +143,13 @@ test('selectorOf round-trips through the engine for every element', () => {
   const elements = [...descendants(body)].filter((n) => isEl(n));
   assert.equal(elements.length, 5);
   for (const node of elements) {
-    // `pathOf` is rooted at the document root, so paths start at `body`.
+    // `pathOf` starts at the earliest ancestor below the root it is given.
     const selector = selectorOf(root, node);
     assert.notEqual(selector, '');
-    assert.match(selector, /^body/);
+    assert.match(selector, /^html > body/);
     assert.equal(query(root, selector).node, node, `selector: ${selector}`);
   }
   assert.equal(query(root, selectorOf(root, body)).node, body);
-  assert.equal(selectorOf(root, query(body, '#s').node), 'body:nth-child(2) > section#s');
-  assert.equal(selectorOf(root, query(body, 'section > p').node), 'body:nth-child(2) > section#s > p:nth-of-type(1)');
+  assert.equal(selectorOf(root, query(body, '#s').node), 'html > body > section#s');
+  assert.equal(selectorOf(root, query(body, 'section > p').node), 'html > body > section#s > p:nth-of-type(1)');
 });

@@ -7,7 +7,7 @@
 
 import { readFileSync, writeFileSync, renameSync, existsSync, readdirSync } from 'node:fs';
 import { basename, dirname, extname, join, resolve } from 'node:path';
-import { format, normalizeFragment, emitBlock } from './format.js';
+import { format, normalizeDocument, normalizeFragment, emitBlock, serialize } from './format.js';
 import { parse } from './parse.js';
 import { INLINE, isEl, parentOf, pathOf, textOf } from './tree.js';
 import { lint } from './lint.js';
@@ -25,6 +25,8 @@ const fail = (message) => { err(`neodoc: ${message}`); return 2; };
 const now = () => new Date().toISOString().replace(/\.\d+Z$/, 'Z');
 
 export async function main(argv) {
+  // `neodoc md x.nd.html -o - | head` closes the pipe; that is not an error.
+  process.stdout.on('error', (e) => { if (e.code === 'EPIPE') process.exit(0); throw e; });
   const [name, ...rest] = argv;
   const args = parseArgs(rest);
   try {
@@ -41,6 +43,8 @@ export async function main(argv) {
 
 // ------------------------------------------------------------------- arguments
 
+const BOOLEAN_FLAGS = new Set(['check', 'write', 'w', 'json', 'text', 'stdin', 'fix', 'open', 'done', 'quiet', 'help']);
+
 function parseArgs(argv) {
   const positional = [];
   const flags = {};
@@ -52,10 +56,16 @@ function parseArgs(argv) {
       const key = eq === -1 ? token.slice(2) : token.slice(2, eq);
       if (eq !== -1) { flags[key] = token.slice(eq + 1); continue; }
       const next = argv[i + 1];
-      if (next !== undefined && !next.startsWith('--')) { flags[key] = next; i++; } else flags[key] = true;
+      // A value-taking flag may also be used as a bare modifier (`--file x --md`).
+      if (!BOOLEAN_FLAGS.has(key) && next !== undefined && !next.startsWith('--')) { flags[key] = next; i++; } else flags[key] = true;
       continue;
     }
-    if (token.startsWith('-') && token.length === 2) { flags[token.slice(1)] = true; continue; }
+    if (token.startsWith('-') && token.length === 2) {
+      const key = token.slice(1);
+      const next = argv[i + 1];
+      if (!BOOLEAN_FLAGS.has(key) && next !== undefined && !next.startsWith('--')) { flags[key] = next; i++; } else flags[key] = true;
+      continue;
+    }
     positional.push(token);
   }
   return { positional, flags };
@@ -67,18 +77,26 @@ function hasStyle(text) {
   return /<style[\s>]/i.test(text);
 }
 
-/** Open a document: canonicalize it, then parse the canonical text. */
+/** Parse + normalize + serialize the text, yielding a canonical tree we can mutate. */
+function docFrom(text, mode) {
+  const { root } = parse(text);
+  const warnings = [];
+  normalizeDocument(root, warnings, { style: mode });
+  return { root, warnings };
+}
+
 function openDoc(file) {
   const raw = readFileSync(file, 'utf8');
   const mode = hasStyle(raw) ? 'inline' : 'none';
-  const text = format(raw, { style: mode }).text;
-  const { root } = parse(text);
-  const html = root.children.find((c) => isEl(c, 'html'));
+  const doc = docFrom(raw, mode);
+  const text = serialize(doc.root);
+  const html = doc.root.children.find((c) => isEl(c, 'html'));
   return {
     file,
     raw,
     text,
-    root,
+    root: doc.root,
+    warnings: doc.warnings,
     html,
     head: html.children.find((c) => isEl(c, 'head')),
     body: html.children.find((c) => isEl(c, 'body')),
@@ -94,16 +112,24 @@ function writeAtomic(file, text) {
 }
 
 function saveDoc(doc, target = doc.file) {
-  const text = serializeDoc(doc);
+  // Re-normalize so the invariant holds for every mutation: what lands on disk
+  // is canonical even when the edit itself produced a stray space or a wrapped
+  // block (see docs/SPEC.md §4).
+  normalizeDocument(doc.root, [], { style: doc.mode });
+  const text = serialize(doc.root);
   if (target === '-') { process.stdout.write(text); return; }
   writeAtomic(target, text);
+  for (const w of doc.warnings) err(`${target}: ${w}`);
   out(`${target}  ${text.length} bytes${doc.reformatted ? '  (was not canonical: reformatted)' : ''}`);
 }
 
-function serializeDoc(doc) {
-  const lines = [];
-  for (const child of doc.root.children) emitBlock(child, 0, lines);
-  return `${lines.join('\n')}\n`;
+function fragmentDoc(nodes, title) {
+  const skeleton = '<!doctype html><html data-neodoc="1" lang="en"><head><title></title></head><body></body></html>';
+  const doc = docFrom(skeleton, 'inline');
+  const html = doc.root.children.find((c) => isEl(c, 'html'));
+  html.children.find((c) => isEl(c, 'head')).children.find((c) => isEl(c, 'title')).children = [{ type: 'text', text: title }];
+  html.children.find((c) => isEl(c, 'body')).children = nodes;
+  return doc;
 }
 
 function inBody(doc, node) {
@@ -188,23 +214,14 @@ function cmdLint(args) {
 function cmdNew(args) {
   const file = args.positional[0];
   const title = String(args.flags.title ?? (file ? basename(file).replace(/\.(nd\.)?html?$/i, '') : 'Untitled'));
-  const skeleton = format(
-    '<!doctype html><html lang="en"><head><title></title></head><body></body></html>',
-    { style: 'inline' },
-  ).text;
-  const { root } = parse(skeleton);
-  const html = root.children.find((c) => isEl(c, 'html'));
-  const head = html.children.find((c) => isEl(c, 'head'));
-  const body = html.children.find((c) => isEl(c, 'body'));
-  head.children.find((c) => isEl(c, 'title')).children = [{ type: 'text', text: title }];
-  body.children = args.flags.stdin
+  const nodes = args.flags.stdin
     ? markdown(readFileSync(0, 'utf8')).nodes
     : [
       { type: 'element', name: 'h1', attrs: {}, children: [{ type: 'text', text: title }] },
       { type: 'element', name: 'p', attrs: {}, children: [] },
     ];
-  const doc = { file: file ?? '-', root, reformatted: false };
-  if (!file) { process.stdout.write(serializeDoc(doc)); return 0; }
+  const doc = { ...fragmentDoc(nodes, title), file: file ?? '-', reformatted: false };
+  if (!file) { process.stdout.write(serialize(doc.root)); return 0; }
   saveDoc(doc);
   return 0;
 }
@@ -249,17 +266,22 @@ function cmdSet(args) {
   return 0;
 }
 
-function cmdInsert(args) {
-  const [file, selector] = args.positional;
-  const mode = ['before', 'after', 'append-to'].find((k) => args.flags[k] !== undefined);
-  if (!file || !mode) return fail('insert: usage: neodoc insert FILE (--before|--after|--append-to) SELECTOR (--md S | --html S | --file F)');
-  const target = mode === 'append-to' ? String(args.flags[mode]) : selector;
+function cmdAdd(args) {
+  const [file] = args.positional;
+  const mode = ['before', 'after', 'into'].find((k) => args.flags[k] !== undefined);
+  if (!file || !mode) return fail('add: usage: neodoc add FILE (--before SEL | --after SEL | --into SEL) (--md S | --html S | --file F | --stdin)');
+  const flagValue = args.flags[mode];
+  const target = String(typeof flagValue === 'string' ? flagValue : args.positional[1]);
+  if (target === 'undefined') throw new Error(`add: --${mode} needs a selector`);
   const doc = openDoc(file);
   const [hit] = bodyHits(doc, target);
   const { nodes } = fragmentSource(args.flags);
-  if (mode === 'append-to') {
-    if (INLINE.has(hit.node.name)) throw new Error(`insert: <${hit.node.name}> cannot contain blocks`);
-    hit.node.children.push(...nodes);
+  if (mode === 'into') {
+    if (INLINE.has(hit.node.name)) throw new Error(`add: <${hit.node.name}> cannot contain blocks`);
+    // `--into 'ul' --md '- x'` means "add an item", not "nest a list": when the
+    // fragment's tag matches the target's, splice in the fragment's children.
+    const merged = nodes.flatMap((n) => (n.type === 'element' && n.name === hit.node.name ? n.children : [n]));
+    hit.node.children.push(...merged);
   } else hit.parent.children.splice(mode === 'before' ? hit.index : hit.index + 1, 0, ...nodes);
   saveDoc(doc);
   return 0;
@@ -297,52 +319,60 @@ function cmdId(args) {
   return 0;
 }
 
-function cmdComment(args) {
+function cmdNote(args) {
   const [sub, file, selector] = args.positional;
-  if (!sub || !file) return fail('comment: usage: neodoc comment add|list|reply|resolve|reopen|rm FILE [...]');
+  if (!sub || !file) return fail('note: usage: neodoc note add|ls|reply|done|undo|rm FILE [...]');
   const doc = openDoc(file);
-  const author = String(args.flags.author ?? process.env.USER ?? 'unknown');
+  const author = String(args.flags.by ?? process.env.USER ?? 'unknown');
   const at = String(args.flags.at ?? now());
 
-  if (sub === 'list') {
-    const state = String(args.flags.state ?? 'all');
+  if (sub === 'ls') {
+    const state = args.flags.open ? 'open' : args.flags.done ? 'resolved' : 'all';
     const items = listComments(doc.html).filter((c) => state === 'all' || c.state === state);
-    if (args.flags.json) out(JSON.stringify({ ok: true, count: items.length, comments: items }, null, 2));
+    if (args.flags.json) out(JSON.stringify({ ok: true, count: items.length, notes: items }, null, 2));
     else for (const c of items) out(`${c.id}  ${c.state}  ${c.path}\n    "${c.anchorText}"\n    ${c.author} ${c.at}: ${c.text}`);
     return 0;
   }
   if (sub === 'add') {
-    if (args.flags.body === undefined) throw new Error('comment add: needs --body "text"');
+    if (args.flags.say === undefined) throw new Error('note add: needs --say "text"');
     const info = addComment(doc.html, {
+      body: doc.html,
       selector,
-      quote: args.flags.quote === undefined ? undefined : String(args.flags.quote),
-      text: String(args.flags.body),
+      quote: args.flags.on === undefined ? undefined : String(args.flags.on),
+      text: String(args.flags.say),
       author,
       at,
     });
     saveDoc(doc);
-    out(`comment ${info.id} anchored at ${info.anchor}`);
+    out(`note ${info.id} ${info.anchor ? `on "${textOf(info.anchor)}"` : '(on the block, no anchor text)'}`);
     return 0;
   }
   const id = selector;
-  if (sub === 'reply') {
-    replyToComment(doc.html, id, { text: String(args.flags.body ?? ''), author, at });
-  } else if (sub === 'resolve') resolveComment(doc.html, id, true);
-  else if (sub === 'reopen') resolveComment(doc.html, id, false);
+  if (sub === 'reply') replyToComment(doc.html, id, { text: String(args.flags.say ?? ''), author, at });
+  else if (sub === 'done') resolveComment(doc.html, id, true);
+  else if (sub === 'undo') resolveComment(doc.html, id, false);
   else if (sub === 'rm') removeComment(doc.html, id);
-  else return fail(`comment: unknown subcommand "${sub}"`);
+  else return fail(`note: unknown subcommand "${sub}"`);
   saveDoc(doc);
   return 0;
 }
 
-function cmdTrack(args) {
-  const [mode, file, selector] = args.positional;
-  if (mode !== 'accept' && mode !== 'reject') return fail('track: usage: neodoc track accept|reject FILE [SELECTOR]');
+function cmdAccept(args) {
+  return foldChanges(args, 'accept');
+}
+
+function cmdReject(args) {
+  return foldChanges(args, 'reject');
+}
+
+function foldChanges(args, mode) {
+  const [file, selector] = args.positional;
+  if (!file) return fail(`${mode}: usage: neodoc ${mode} FILE [SELECTOR]`);
   const doc = openDoc(file);
   const apply = mode === 'accept' ? acceptChanges : rejectChanges;
-  const count = selector ? apply(doc.html, selector) : apply(doc.html);
+  const counts = apply(doc.html, selector);
   saveDoc(doc);
-  out(`${mode}ed ${count} change(s)`);
+  out(`${mode}ed ${counts.ins ?? 0} insertion(s) and ${counts.del ?? 0} deletion(s)`);
   return 0;
 }
 
@@ -352,14 +382,15 @@ function cmdImport(args) {
   const { nodes, warnings } = markdown(text);
   for (const w of warnings) err(`import: ${w}`);
   const title = firstHeadingText(nodes) ?? (source ? basename(source).replace(/\.(md|markdown|txt)$/i, '') : 'Untitled');
-  const skeleton = format('<!doctype html><html lang="en"><head><title></title></head><body></body></html>', { style: 'inline' }).text;
-  const { root } = parse(skeleton);
-  const html = root.children.find((c) => isEl(c, 'html'));
-  html.children.find((c) => isEl(c, 'head')).children.find((c) => isEl(c, 'title')).children = [{ type: 'text', text: title }];
-  html.children.find((c) => isEl(c, 'body')).children = nodes;
-  const doc = { file: String(args.flags.o ?? '-'), root, reformatted: false };
+  const doc = { ...fragmentDoc(nodes, title), file: outputPath(args.flags, '-'), reformatted: false };
   saveDoc(doc, doc.file);
   return 0;
+}
+
+function outputPath(flags, fallback) {
+  if (flags.o === undefined) return fallback;
+  if (typeof flags.o !== 'string') throw new Error('-o needs a path (use -o - for stdout)');
+  return flags.o;
 }
 
 function firstHeadingText(nodes) {
@@ -369,11 +400,19 @@ function firstHeadingText(nodes) {
   return null;
 }
 
-async function cmdTo(args) {
-  const [kind, file] = args.positional;
-  if (kind !== 'md' && kind !== 'docx') return fail('to: usage: neodoc to md|docx FILE [-o OUT]');
+async function cmdMd(args) {
+  return convert(args, 'md');
+}
+
+async function cmdDocx(args) {
+  return convert(args, 'docx');
+}
+
+async function convert(args, kind) {
+  const [file] = args.positional;
+  if (!file) return fail(`${kind}: usage: neodoc ${kind} FILE [-o OUT]`);
   const doc = openDoc(file);
-  const target = args.flags.o ?? (kind === 'md'
+  const target = outputPath(args.flags, kind === 'md'
     ? file.replace(/\.(nd\.)?html?$/i, '.md')
     : file.replace(/\.(nd\.)?html?$/i, '.docx'));
   if (kind === 'md') {
@@ -455,7 +494,7 @@ async function cmdBench(args) {
 }
 
 /** SPEC §10: canonical fixtures are byte-stable, non-canonical inputs converge. */
-function cmdConformance(args) {
+function cmdTest(args) {
   const dir = args.positional[0] ?? 'fixtures';
   let bad = 0;
   const check = (label, ok, detail) => {
@@ -494,47 +533,54 @@ async function cmdServe(args) {
 }
 
 const COMMANDS = {
+  new: cmdNew,
   fmt: cmdFmt,
   lint: cmdLint,
-  new: cmdNew,
+  test: cmdTest,
   get: cmdGet,
   set: cmdSet,
-  insert: cmdInsert,
+  add: cmdAdd,
   rm: cmdRm,
   id: cmdId,
-  comment: cmdComment,
-  track: cmdTrack,
+  note: cmdNote,
+  accept: cmdAccept,
+  reject: cmdReject,
   import: cmdImport,
-  to: cmdTo,
+  md: cmdMd,
+  docx: cmdDocx,
   css: cmdCss,
   bench: cmdBench,
-  conformance: cmdConformance,
   serve: cmdServe,
 };
 
 const USAGE = `neodoc ${VERSION} — plaintext HTML documents
 
+  neodoc new [FILE] [--title T] [--stdin]     create (--stdin reads markdown)
   neodoc fmt [-w] [--check] [--style=inline|none] FILE...
   neodoc lint [--json] [--fix] FILE...
-  neodoc new [FILE] [--title T] [--stdin]        # --stdin reads markdown
+  neodoc test [DIR]                           conformance corpus
+
   neodoc get FILE SELECTOR [--json] [--text]
   neodoc set FILE SELECTOR (--md S | --html S | --file F | --stdin)
-  neodoc insert FILE (--before|--after|--append-to) SELECTOR (--md S | --html S | --file F)
+  neodoc add FILE (--before SEL | --after SEL | --into SEL) (--md S | --html S | --file F | --stdin)
   neodoc rm FILE SELECTOR
   neodoc id FILE --for SELECTOR --as NAME
-  neodoc comment add FILE SELECTOR --body T [--quote S] [--author A] [--at TS]
-  neodoc comment list FILE [--json] [--state open|resolved|all]
-  neodoc comment reply FILE ID --body T
-  neodoc comment resolve|reopen|rm FILE ID
-  neodoc track accept|reject FILE [SELECTOR]
-  neodoc import [FILE.md] [-o OUT]
-  neodoc to md FILE [-o OUT] [--comments html|critic|drop]
-  neodoc to docx FILE [-o OUT]
+
+  neodoc note add FILE SELECTOR --say T [--on QUOTE] [--by AUTHOR] [--at TS]
+  neodoc note ls FILE [--json] [--open | --done]
+  neodoc note reply FILE ID --say T
+  neodoc note done|undo|rm FILE ID
+  neodoc accept FILE [SELECTOR]               fold <ins>, drop <del>
+  neodoc reject FILE [SELECTOR]
+
+  neodoc import [FILE.md] [-o OUT]            markdown -> neodoc
+  neodoc md FILE [-o OUT] [--comments html|critic|drop]
+  neodoc docx FILE [-o OUT]
+
   neodoc serve FILE [--port N] [--open]
   neodoc bench FILE [--rounds N]
-  neodoc conformance [DIR]
   neodoc css
 
 Selectors are CSS (SPEC §7) matched against the whole document, so
-\`body > section:nth-child(2) > p\` works. Mutating commands write in place;
+\`body > section:nth-child(2) > p\` works. Writing commands save in place;
 use -o - for stdout. Exit codes: 0 ok, 1 lint/--check violations, 2 usage error.`;
