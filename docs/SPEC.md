@@ -256,6 +256,10 @@ neodoc css
   via `[x]`), blockquotes, fenced code with `data-lang`, GFM tables with
   alignment, figures→`![alt](src)` + italic caption paragraph, `hr`, links,
   images, `**`/`*`/`` ` ``/`~~`/`==`/`<sub>`/`<sup>`. `data-checked` → `[x]`.
+  Anything the subset cannot carry *exactly* — an attribute markdown has no slot for,
+  an `img` without `alt`, a caption that is itself emphasised, a fence info string
+  that is not a single word — is emitted as canonical raw HTML, which GFM passes
+  through and `import` reads back unchanged.
   Comments: `--comments=html` (default) emits `<mark data-c>`/`<aside data-thread>`
   verbatim so nothing is lost; `critic` emits `{==text==}{>>author: text<<}`;
   `drop` strips them. Inline `id`s are preserved as `<a id>` anchors when present.

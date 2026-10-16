@@ -3509,6 +3509,11 @@ await (async function () {
 //   HTML. GFM passes raw HTML through, and `fromMarkdown` hands vocabulary tags
 //   back unchanged, so those nodes survive instead of being guessed at. That is
 //   why `format.js` is imported here: the fallback *is* the canonical serializer.
+// - The same rule applies at attribute level: `<a>` and `<img>` print as markdown
+//   only when every attribute they carry is one markdown can hold (`href`/`src`/
+//   `alt`/`title`, `alt` required), a `figure` only when it holds nothing but its
+//   image and a plain caption, and a fence only when its info string is a single
+//   word. Otherwise the reader would hand back something subtly different.
 // - `<br>` prints as GFM's hard break (two trailing spaces), never literal `<br>`:
 //   one encoding per node, and the reader turns it back into `<br>`.
 // - List continuation uses the marker width (2 for `- `, 3 for `1. `) so GFM still
@@ -3553,6 +3558,11 @@ const rawHtml = (node) => {
   return out.join('\n');
 };
 const rawInline = (node) => emitInline(node);
+
+/** What markdown can carry for these two elements; anything else → raw HTML. */
+const LINK_ATTRS = new Set(['href', 'title']);
+const IMG_ATTRS = new Set(['src', 'alt', 'title']);
+const onlyAttrs = (node, allowed) => Object.keys(attrsOf(node)).every((k) => allowed.has(k));
 
 const attrsOf = (node) => node.attrs || {};
 const hasAttrs = (node) => Object.keys(attrsOf(node)).length > 0;
@@ -3618,17 +3628,20 @@ function nodeMd(node, ctx) {
 }
 
 function linkMd(node, ctx) {
-  const { href, id, title, target, rel } = attrsOf(node);
-  if (!href || id || target || rel || /[<>]/.test(href)) return rawInline(node);
+  const { href, title } = attrsOf(node);
+  if (!href || /[<>]/.test(href) || !onlyAttrs(node, LINK_ATTRS)) return rawInline(node);
   const text = inlineMd(kidsOf(node), ctx);
   const t = title ? ` "${title.replace(/"/g, '\\"')}"` : '';
   return `[${text}](${dest(href)}${t})`;
 }
 
 function imgMd(node) {
-  const { src = '', alt = '', id, width, height } = attrsOf(node);
-  if (id || width || height || /[<>]/.test(src)) return rawInline(node);
-  return `![${escMd(alt)}](${dest(src)})`;
+  const { src = '', alt, title } = attrsOf(node);
+  // `alt` has to be *present*: markdown always reads one back (`![]` → `alt=""`),
+  // and a round trip that grows an attribute is not a round trip.
+  if (alt === undefined || /[<>]/.test(src) || !onlyAttrs(node, IMG_ATTRS)) return rawInline(node);
+  const t = title ? ` "${title.replace(/"/g, '\\"')}"` : '';
+  return `![${escMd(alt)}](${dest(src)}${t})`;
 }
 
 /** Consecutive inline nodes become one paragraph; block elements stand alone. */
@@ -3674,6 +3687,9 @@ function paraMd(md) {
 
 function fenceMd(node) {
   const lang = attrsOf(node)['data-lang'] || '';
+  // The reader keeps the first word of the info string, and a backtick would end the
+  // fence: either way the language would come back changed.
+  if (/[\s`]/.test(lang)) return rawHtml(node);
   const text = textOf(node);
   const runs = text.match(/`{3,}/g) || [];
   const fence = '`'.repeat(Math.max(3, ...runs.map((r) => r.length + 1)));
@@ -3749,18 +3765,20 @@ function tableMd(node, ctx) {
 }
 
 function figureMd(node, ctx) {
-  const img = kidsOf(node).find((c) => isEl(c, 'img'));
-  const cap = kidsOf(node).find((c) => isEl(c, 'figcaption'));
-  if (!img) return rawHtml(node);
-  let out = imgMd(img);
-  if (cap) {
-    const md = inlineMd(kidsOf(cap), ctx);
-    // `*caption*` is the figure form; an emphasised caption stays a plain
-    // paragraph so that reading `*…*` back cannot nest emphasis.
-    const plain = !kidsOf(cap).some((c) => c.type === 'element' && (c.name === 'em' || c.name === 'strong'));
-    out += `\n\n${plain ? `*${md}*` : md}`;
-  }
-  return out;
+  const kids = kidsOf(node);
+  const img = kids.find((c) => isEl(c, 'img'));
+  const cap = kids.find((c) => isEl(c, 'figcaption'));
+  // Layout whitespace is not a child to report; anything else the figure holds is.
+  const extra = kids.some((c) => c !== img && c !== cap && !(c.type === 'text' && !c.text.trim()));
+  // A caption markdown cannot hold exactly — emphasised (it comes back as plain
+  // text), carrying `*` or a line break (it would read as ordinary markdown), empty
+  // — and a figure without one (`![…](…)` reads back as `<p><img></p>`) all go out
+  // as raw HTML instead.
+  const richCap = !!cap && kidsOf(cap).some((c) => c.type === 'element' && (c.name === 'em' || c.name === 'strong'));
+  const capMd = cap ? inlineMd(kidsOf(cap), ctx) : '';
+  const image = img ? imgMd(img) : '';
+  if (!img || !cap || !capMd || extra || richCap || /[*\n]/.test(capMd) || image.startsWith('<')) return rawHtml(node);
+  return `${image}\n\n*${capMd}*`;
 }
 
 function asideMd(node, ctx) {
@@ -4229,7 +4247,8 @@ function readImage(src, i) {
   const alt = src.slice(i + 2, close).replace(/\\(.)/g, '$1');
   const d = readDest(src, close + 1);
   if (!d) return null;
-  return { html: `<img alt="${escapeAttr(decodeEntities(alt))}" src="${escapeAttr(d.url)}">`, i: d.i };
+  const t = d.title ? ` title="${escapeAttr(d.title)}"` : '';
+  return { html: `<img alt="${escapeAttr(decodeEntities(alt))}" src="${escapeAttr(d.url)}"${t}>`, i: d.i };
 }
 
 function readLink(src, i, ctx, pend) {

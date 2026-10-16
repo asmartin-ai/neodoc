@@ -323,3 +323,37 @@ test('elements markdown cannot express fall back to canonical HTML', () => {
   assert.match(md, /<u>under<\/u>/);
   assert.equal(canon(fromMarkdown(md).html), canon(html));
 });
+
+test('attributes markdown cannot carry come back as raw HTML, not stripped', () => {
+  const cases = [
+    '<p><a href="u" title="T">x</a></p>',
+    '<p><a href="u" download>x</a></p>',
+    '<p><a href="u" rel="nofollow">x</a></p>',
+    '<p><img alt="a" src="s.png" title="T"></p>',
+    '<p><img alt="a" src="s.png" width="50%"></p>',
+    '<p><img src="s.png"></p>',
+  ];
+  for (const c of cases) {
+    const { got, md, warnings } = roundTrip(c);
+    assert.deepEqual(warnings, [], `warnings for ${c}`);
+    assert.equal(got, canon(c), `${c} (md: ${JSON.stringify(md)})`);
+  }
+});
+
+test('a figure survives only when markdown can express all of it', () => {
+  const cases = [
+    '<figure><img alt="c" src="c.png"><figcaption>cap</figcaption></figure>',
+    '<figure><img alt="c" src="c.png"><figcaption><em>x</em></figcaption></figure>',
+    '<figure><img alt="c" src="c.png"><p>caption</p></figure>',
+    '<figure><img alt="c" src="c.png"></figure>',
+    '<figure><img alt="c" src="c.png"><figcaption></figcaption></figure>',
+    '<figure><img alt="c" src="c.png"><figcaption>a * b</figcaption></figure>',
+    '<figure><img alt="c" src="c.png"><figcaption>a<br>b</figcaption></figure>',
+  ];
+  for (const c of cases) assert.equal(roundTrip(c).got, canon(c), c);
+});
+
+test('a fence info string that is not one word goes out as raw HTML', () => {
+  assert.equal(roundTrip('<pre data-lang="c sharp">int x;</pre>').got, canon('<pre data-lang="c sharp">int x;</pre>'));
+  assert.match(roundTrip('<pre data-lang="js">a</pre>').md, /^```js/);
+});
