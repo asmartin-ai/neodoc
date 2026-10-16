@@ -256,7 +256,7 @@ function cmdGet(args) {
   const hits = queryAll(doc.html, selector);
   if (args.flags.json) {
     out(JSON.stringify({
-      ok: true,
+      ok: hits.length > 0,
       file,
       count: hits.length,
       matches: hits.map((h) => ({

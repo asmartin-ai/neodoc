@@ -59,3 +59,10 @@ test('accept and reject leave the file alone when nothing matched', () => {
   assert.equal(res.status, 1, 'a selector that folds nothing is a no-match');
   assert.equal(readFileSync(file, 'utf8'), before, 'a no-op must not rewrite the file');
 });
+
+test('`get --json` reports ok:false when nothing matched', () => {
+  const file = tmpFile('doc.nd.html', DOC);
+  const res = cli(['get', file, 'body > h9', '--json']);
+  assert.equal(res.status, 1);
+  assert.equal(JSON.parse(res.stdout).ok, false, 'ok must agree with the exit code');
+});
