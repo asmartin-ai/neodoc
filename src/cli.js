@@ -15,8 +15,6 @@ import { THEME_CSS } from './theme.js';
 import { queryAll } from './select.js';
 import { addComment, acceptChanges, listComments, rejectChanges, removeComment, replyToComment, resolveComment } from './comments.js';
 import { fromMarkdown, toMarkdown } from './markdown.js';
-import { toDocx } from './docx.js';
-import { serve } from './serve.js';
 import { VERSION } from './version.js';
 
 const out = (s) => process.stdout.write(`${s}\n`);
@@ -429,6 +427,9 @@ async function convert(args, kind) {
     else { writeAtomic(target, md); out(`${target}  ${md.length} bytes`); }
     return 0;
   }
+  // Loaded on demand so every other command skips docx.js and, more importantly,
+  // serve.js — whose node:http import alone costs ~15ms of process startup.
+  const { toDocx } = await import('./docx.js');
   const bytes = await toDocx(doc.body, {
     title: textOf(doc.head.children.find((c) => isEl(c, 'title')) ?? { children: [] }),
     author: metaOf(doc, 'author'),
@@ -494,6 +495,7 @@ async function cmdBench(args) {
   const doc = openDoc(file);
   await measure('parse', () => parse(doc.text));
   await measure('get p', () => queryAll(doc.html, 'p'));
+  const { toDocx } = await import('./docx.js');
   await measure('to md', () => toMarkdown(doc.body, {}));
   await measure('to docx', () => toDocx(doc.body, { title: 'bench', resolveImage: () => null }));
   out(`${file}: ${raw.length} bytes, ${queryAll(doc.html, 'body > *').length} top-level blocks`);
@@ -536,6 +538,7 @@ function cmdTest(args) {
 async function cmdServe(args) {
   const file = args.positional[0];
   if (!file) return fail('serve: usage: neodoc serve FILE [--port N] [--open]');
+  const { serve } = await import('./serve.js');
   await serve({ file: resolve(file), port: Number(args.flags.port ?? 8765), open: !!args.flags.open });
   return 0;
 }
