@@ -9,7 +9,7 @@
 import { parse } from './parse.js';
 import { THEME_CSS } from './theme.js';
 import { GENERATOR } from './version.js';
-import { HEAD_MOVED, RENAMES, VOID, hasBlockChild, isDroppedAttr, isEmptyInline } from './tree.js';
+import { BLOCK, HEAD_MOVED, RENAMES, VOID, hasBlockChild, isDroppedAttr, isEmptyInline } from './tree.js';
 import { escapeText, escapeAttr } from './entities.js';
 
 const INDENT = '  ';
@@ -51,6 +51,9 @@ function cleanAttrs(name, attrs, warnings) {
   if (name === 'a' && out.target === '_blank' && !out.rel) out.rel = 'noopener';
   return out;
 }
+
+/** Elements that hold inline flow, where a comment must not force a line break. */
+const INLINE_FLOW = new Set(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'figcaption', 'li', 'td', 'th']);
 
 const INLINE_MERGEABLE = new Set(['strong', 'em', 's', 'u', 'del', 'ins', 'mark', 'code', 'sub', 'sup']);
 
@@ -297,7 +300,13 @@ export function emitBlock(node, depth, out) {
   }
   if (VOID.has(name)) { out.push(pad + open); return; }
   const kids = node.children || [];
-  if (hasBlockChild(kids)) {
+  // A comment between two text runs is inline: putting it on its own line adds
+  // whitespace the reader can see (`foo<!--x-->bar` rendering as `foo bar`). Anywhere
+  // else — between two blocks — a comment is a line of its own.
+  const blocky = kids.some((c) => (c.type === 'comment'
+    ? !INLINE_FLOW.has(name)
+    : c.type === 'element' && BLOCK.has(c.name)));
+  if (blocky) {
     out.push(pad + open);
     for (const c of kids) emitBlock(c, depth + 1, out);
     out.push(`${pad}</${name}>`);

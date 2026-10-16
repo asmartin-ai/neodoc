@@ -154,6 +154,22 @@ test('a title nested in a block is reported where it is, not called fixable', ()
   assert.deepEqual(lint(direct).filter((f) => f.rule === 'misplaced-head').map((f) => f.fixable), [true]);
 });
 
+test('a comment between two text runs stays inline', () => {
+  // On its own line the renderer shows a space the file does not have.
+  assert.deepEqual(bodyOf(fmt('<body><p>foo<!--x-->bar</p></body>')), ['    <p>foo<!--x-->bar</p>']);
+  assert.deepEqual(bodyOf(fmt('<body><ul><li>a<!--c-->b</li></ul></body>')), [
+    '    <ul>',
+    '      <li>a<!--c-->b</li>',
+    '    </ul>',
+  ]);
+  // Between two blocks it is a line of its own.
+  assert.deepEqual(bodyOf(fmt('<body><p>x</p><!--c--><p>y</p></body>')), [
+    '    <p>x</p>',
+    '    <!--c-->',
+    '    <p>y</p>',
+  ]);
+});
+
 test('unknown attributes are kept, behaviour and presentation are dropped', () => {
   // docs/SPEC.md §4.6: content we do not understand is still content, so an
   // unknown attribute survives `fmt` (and `lint` reports it, unfixable). An event
