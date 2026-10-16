@@ -240,14 +240,51 @@ function sweepEditorNodes() {
   }
 }
 
+/**
+ * Where the caret is: the canonical selector of the block it sits in plus the number
+ * of characters into that block. `applyDocument` rebuilds the whole body, so a
+ * command that changed something has to put the caret back itself — without this,
+ * clicking Accept left the selection at (body, 0) and the next keystroke went
+ * nowhere.
+ */
+function caretMark() {
+  const range = caretRange();
+  const block = range && blockOf(range.startContainer);
+  if (!block) return null;
+  const selector = liveSelector(block);
+  if (range.startContainer.nodeType !== 3) return { selector, offset: 0 };
+  const walk = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+  let offset = 0;
+  for (let n = walk.nextNode(); n && n !== range.startContainer; n = walk.nextNode()) offset += n.length;
+  if (walk.currentNode !== range.startContainer) return { selector, offset: 0 };
+  return { selector, offset: offset + range.startOffset };
+}
+
+/** Put the caret back at `mark`, if the block it named is still in the document. */
+function restoreCaret(mark) {
+  if (!mark) return;
+  let block = null;
+  try { block = document.querySelector(mark.selector); } catch { /* an id with a quote in it */ }
+  if (!block) return;
+  let left = mark.offset;
+  const walk = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+  for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+    if (left <= n.length) { setCaret(n, left); return; }
+    left -= n.length;
+  }
+  caretInto(block); // the block shrank under the caret: go to its start
+}
+
 /** Mutate the document tree and show the result. `fn(tree)` gets the #root. */
 function mutate(fn) {
+  const keep = caretMark();
   const { text: src } = canonicalText();
   const tree = parse(src).root;
   const result = fn(tree);
   applyDocument(serialize(tree));
   state.dirty = true;
   refresh();
+  restoreCaret(keep);
   return result;
 }
 
