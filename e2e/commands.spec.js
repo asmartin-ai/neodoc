@@ -118,7 +118,11 @@ test('a block command keeps a list item a list item', async ({ page }) => {
   await page.locator('li').click();
   await page.locator('button[data-cmd="h1"]').click();
   // Renaming the item produced `<ul><h1>x</h1></ul>`, whose markdown export is empty.
-  expect(await page.evaluate(() => document.querySelector('ul').outerHTML)).toBe('<ul><li><h1>x</h1></li></ul>');
+  // Asserted structurally: the canonical form puts blocks on their own lines.
+  expect(await page.evaluate(() => {
+    const ul = document.querySelector('ul');
+    return { tag: ul.firstElementChild?.tagName, heading: !!ul.querySelector('li > h1'), stray: !!ul.querySelector(':scope > h1') };
+  })).toEqual({ tag: 'LI', heading: true, stray: false });
   const md = await page.evaluate(() => window.neodocEditor.canonicalText().text);
   expect(md).toContain('<li>');
   expect(md).toContain('<h1>');
@@ -152,8 +156,10 @@ test('an inline command refuses a selection that spans blocks', async ({ page })
   await page.keyboard.press('Control+b');
 
   // `<strong><p>alpha</p><p>beta</p></strong>` is not a shape the format has.
-  expect(await page.evaluate(() => document.body.innerHTML.split('<div id="chrome"')[0].replace(/\s+/g, ' ').trim()))
-    .toBe('<p>alpha</p><p>beta</p>');
+  expect(await page.evaluate(() => ({
+    paragraphs: document.querySelectorAll('body > p').length,
+    wrapped: document.querySelectorAll('strong > p, em > p, ins > p, del > p').length,
+  }))).toEqual({ paragraphs: 2, wrapped: 0 });
   await expect(page.locator('#st-state')).toContainText(/inside one block/i);
   expectClean(noise);
 });
@@ -174,12 +180,11 @@ test('Tab does not build a container out of a bare list item', async ({ page }) 
   await expect(page.locator('li')).toHaveText('bare'); // the open is asynchronous
 
   await page.locator('li').click();
+  const before = await page.evaluate(() => document.body.innerHTML.split('<div id="chrome"')[0]);
   await page.keyboard.press('Tab');
   // `list` was the body, so the indent branch built a `<body>` element inside the
-  // paragraph above.
-  expect(await page.evaluate(() => document.body.querySelectorAll('body > p body').length)).toBe(0);
-  expect(await page.evaluate(() => document.body.innerHTML.split('<div id="chrome"')[0].replace(/\s+/g, ' ').trim()))
-    .toBe('<p>before</p><li>bare</li>');
+  // paragraph above. The refusal changes nothing at all.
+  expect(await page.evaluate(() => document.body.innerHTML.split('<div id="chrome"')[0])).toBe(before);
   await expect(page.locator('#st-state')).toContainText(/not inside a list/i);
   expectClean(noise);
 });
