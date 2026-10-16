@@ -82,9 +82,24 @@ test('emphasis forms, `_` inside words, and nested emphasis', () => {
 });
 
 test('strike, highlight and CriticMarkup changes', () => {
+  // `~~` is GFM strikethrough, so it reads back as <s>: if it read back as <del>, a
+  // formatting element would become a tracked deletion and `accept` would delete the
+  // words. `{-- --}` is the deletion form.
   assert.deepEqual(lines('~~old~~ ==hot== {++new++} {--gone--}'), [
-    '<p><del>old</del> <mark>hot</mark> <ins>new</ins> <del>gone</del></p>',
+    '<p><s>old</s> <mark>hot</mark> <ins>new</ins> <del>gone</del></p>',
   ]);
+});
+
+test('prose after a hard break cannot become a list, heading or rule', () => {
+  // The two-space hard break puts the rest of the paragraph on a line of its own,
+  // where `- x` or `# x` would re-parse as a block: the reader's sentence would come
+  // back as structure they never wrote.
+  // `> x` comes back as `&gt; x`: text escapes `& < >` in canonical form.
+  const cases = [['- x', '- x'], ['# x', '# x'], ['> x', '&gt; x'], ['1. x', '1. x'], ['---', '---']];
+  for (const [text, canonical] of cases) {
+    const md = toMarkdown(bodyNode(`<p>a<br>${text}</p>`));
+    assert.deepEqual(lines(md), [`<p>a<br>${canonical}</p>`], `round trip of ${JSON.stringify(md)}`);
+  }
 });
 
 test('email autolinks and inline raw HTML for sub/sup', () => {
@@ -277,9 +292,9 @@ test('each comment thread follows its own block; drop removes them all', () => {
   assert.equal(toMarkdown(bodyNode(html), { comments: 'drop' }), 'one a\n\ntwo b\n');
 });
 
-test('tracked changes: ins is HTML, del is ~~, critic uses braces', () => {
+test('tracked changes stay HTML in html mode and use braces in critic mode', () => {
   const body = bodyNode('<p><ins data-author="ada">new</ins> <del data-author="ada">old</del></p>');
-  assert.equal(toMarkdown(body), '<ins data-author="ada">new</ins> ~~old~~\n');
+  assert.equal(toMarkdown(body), '<ins data-author="ada">new</ins> <del data-author="ada">old</del>\n');
   assert.equal(toMarkdown(body, { comments: 'critic' }), '{++new++} {--old--}\n');
   assert.equal(toMarkdown(bodyNode('<p>{++new++} {--old--} {==hi==}</p>') && bodyNode('<p><ins>new</ins></p>')), '<ins>new</ins>\n');
 });

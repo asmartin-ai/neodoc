@@ -73,7 +73,14 @@ function codeSpan(text) {
 
 function inlineMd(nodes, ctx) {
   const list = nodes || [];
-  return list.map((n, i) => (isEl(n, 'br') && (ctx.solidBr || !twoSpaceBreak(list, i)) ? '<br>' : nodeMd(n, ctx))).join('');
+  let broke = false;
+  return list.map((n, i) => {
+    if (isEl(n, 'br') && (ctx.solidBr || !twoSpaceBreak(list, i))) { broke = false; return '<br>'; }
+    const md = nodeMd(n, ctx);
+    if (broke && n.type === 'text') { broke = true; return paraMd(md); }
+    broke = isEl(n, 'br');
+    return md;
+  }).join('');
 }
 
 /** The two-space hard break needs a line of its own text on both sides. */
@@ -92,8 +99,11 @@ function nodeMd(node, ctx) {
     case 'code': return codeSpan(textOf(node));
     case 's': return `~~${inline()}~~`;
     case 'del':
+      // A tracked deletion must not be written as `~~`, which means *strikethrough*:
+      // importing it back would turn a normal `<s>` into a deletion, and
+      // \`neodoc accept\` would then delete text the author never proposed removing.
       if (ctx.comments === 'critic' && A['data-author']) return `{--${inline()}--}`;
-      return `~~${inline()}~~`;
+      return rawInline(node);
     case 'ins': return ctx.comments === 'critic' ? `{++${inline()}++}` : rawInline(node);
     case 'mark':
       if (!A['data-c']) return `==${inline()}==`;
@@ -660,7 +670,7 @@ function readDest(src, i) {
   } else {
     let depth = 0;
     const start = j;
-    while (j < src.length && (depth > 0 || src[j] !== ')')) {
+    while (j < src.length && (depth > 0 || (src[j] !== ')' && (depth > 0 || !/\s/.test(src[j]))))) {
       if (src[j] === '\\') j++;
       else if (src[j] === '(') depth++;
       else if (src[j] === ')') depth--;
@@ -670,9 +680,9 @@ function readDest(src, i) {
     url = src.slice(start, j);
   }
   const rest = src.slice(j);
-  const t = /^[ \t\n]*"((?:[^"\\]|\\.)*)"[ \t\n]*\)/.exec(rest);
+  const t = /^[ \t\n]*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|\(((?:[^()\\]|\\.)*)\))[ \t\n]*\)/.exec(rest);
   const after = /^[ \t\n]*\)/.exec(rest);
-  if (t) return { url, title: t[1].replace(/\\(.)/g, '$1'), i: j + t[0].length };
+  if (t) return { url, title: (t[1] ?? t[2] ?? t[3]).replace(/\\(.)/g, '$1'), i: j + t[0].length };
   if (after) return { url, title: '', i: j + after[0].length };
   return null;
 }
@@ -784,7 +794,7 @@ function inline(src, ctx, pend) {
       if (src[i + 1] === c && !(c === '_' && wordBefore)) { if (delim(c + c, c + c, 'strong')) continue; }
       if (c === '*' || !wordBefore) { if (delim(c, c, 'em')) continue; }
     }
-    if (src.startsWith('~~', i) && delim('~~', '~~', 'del')) continue;
+    if (src.startsWith('~~', i) && delim('~~', '~~', 's')) continue;
     if (src.startsWith('==', i) && delim('==', '==', 'mark')) continue;
     if (src.startsWith('{++', i) && delim('{++', '++}', 'ins')) continue;
     if (src.startsWith('{--', i) && delim('{--', '--}', 'del')) continue;
