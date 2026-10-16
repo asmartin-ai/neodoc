@@ -5,8 +5,8 @@
 // The editor auto-detects it through `GET /doc` and saves through `POST /save`, so
 // the assertion is about bytes on disk, not about what the page displays.
 //
-// The server binds 127.0.0.1 only and resolves `?path=` against its own cwd, so the
-// document copy lives in a per-test temp dir and the child is spawned there.
+// The server binds 127.0.0.1 only and edits exactly the file it was started with,
+// so the document copy lives in a per-test temp dir and the child is spawned there.
 
 import { spawn } from 'node:child_process';
 import { test, expect } from '@playwright/test';

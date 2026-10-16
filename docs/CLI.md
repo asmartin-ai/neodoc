@@ -107,8 +107,10 @@ The document needs no server to render, and neither does the editor: the page ke
 `editor.js` and its `src/*.js` imports until you want a server; `tools/bundle.js`
 inlines them so `editor/neodoc-editor.html` runs from `file://` offline. Use
 `neodoc serve` only for the conveniences it adds — saving in place in browsers
-without the File System Access API, and the `GET /doc` + `POST /save?path=<name>`
-pair the editor auto-detects. It binds to `127.0.0.1` only.
+without the File System Access API, and the `GET /doc` + `POST /save` pair the
+editor auto-detects. It binds to `127.0.0.1` only, answers only to loopback `Host`
+names, refuses writes that did not come from its own page, and ever edits exactly
+the one file it was started with (`?path=` is accepted and ignored).
 
 ## Performance
 

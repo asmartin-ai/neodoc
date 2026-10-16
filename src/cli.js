@@ -5,8 +5,8 @@
 // write to an already-canonical file changes only what the command touched.
 // (If the file was not canonical, the write normalizes it; the CLI says so.)
 
-import { readFileSync, writeFileSync, renameSync, existsSync, readdirSync } from 'node:fs';
-import { basename, dirname, extname, join, resolve } from 'node:path';
+import { chmodSync, closeSync, existsSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { basename, dirname, extname, join, resolve, sep } from 'node:path';
 import { format, normalizeDocument, normalizeFragment, emitBlock, serialize } from './format.js';
 import { parse } from './parse.js';
 import { INLINE, isEl, parentOf, pathOf, textOf } from './tree.js';
@@ -107,9 +107,20 @@ function openDoc(file) {
   };
 }
 
-function writeAtomic(file, text) {
+/** Temp file + rename. `wx` so a planted symlink cannot make us write through it,
+ *  and the target's own mode is restored so `fmt -w` never widens permissions. */
+function writeAtomic(file, text, bytes = null) {
   const tmp = `${file}.neodoc-${process.pid}.tmp`;
-  writeFileSync(tmp, text);
+  let mode = 0o644;
+  try { mode = statSync(file).mode & 0o777; } catch { /* new file */ }
+  const data = bytes ?? text;
+  const fd = openSync(tmp, 'wx', 0o600);
+  try {
+    writeFileSync(fd, data);
+  } finally {
+    closeSync(fd);
+  }
+  chmodSync(tmp, mode);
   renameSync(tmp, file);
 }
 
@@ -438,7 +449,7 @@ async function convert(args, kind) {
     resolveImage: imageResolver(dirname(resolve(file))),
   });
   if (target === '-') process.stdout.write(Buffer.from(bytes));
-  else { writeFileSync(target, bytes); out(`${target}  ${bytes.length} bytes`); }
+  else { writeAtomic(target, null, bytes); out(`${target}  ${bytes.length} bytes`); }
   return 0;
 }
 
@@ -451,20 +462,34 @@ const MIME = {
   png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
   webp: 'image/webp', svg: 'image/svg+xml', bmp: 'image/bmp', avif: 'image/avif',
 };
+/** A `data:` URI's media type is document input, so it must look like one. */
+const MIME_TYPE = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/i;
 
 function imageResolver(baseDir) {
+  const root = resolve(baseDir);
   return (src) => {
     const data = /^data:([^;,]+)(;base64)?,(.*)$/s.exec(src);
     if (data) {
-      return {
-        mime: data[1],
-        bytes: data[2] ? Buffer.from(data[3], 'base64') : Buffer.from(decodeURIComponent(data[3])),
-      };
+      const mime = MIME_TYPE.test(data[1]) ? data[1].toLowerCase() : 'application/octet-stream';
+      try {
+        const bytes = data[2] ? Buffer.from(data[3], 'base64') : Buffer.from(decodeURIComponent(data[3]));
+        return { mime, bytes };
+      } catch {
+        return null; // a malformed percent escape is a broken image, not a crash
+      }
     }
     if (/^https?:/i.test(src)) return null;
-    const path = resolve(baseDir, src);
+    // Confined to the document's own directory (docs/CLI.md): a document received
+    // from someone else must not be able to name /etc/hostname or ~/.ssh/id_rsa and
+    // have it embedded in the file we hand back.
+    const path = resolve(root, src.replace(/^[/\\]+/, ''));
+    if (path !== root && !path.startsWith(root + sep)) return null;
     if (!existsSync(path)) return null;
-    return { mime: MIME[extname(path).slice(1).toLowerCase()] ?? 'application/octet-stream', bytes: readFileSync(path) };
+    let real = path;
+    try { real = realpathSync(path); } catch { return null; }
+    const rootReal = realpathSync(root);
+    if (real !== rootReal && !real.startsWith(rootReal + sep)) return null;
+    return { mime: MIME[extname(real).slice(1).toLowerCase()] ?? 'application/octet-stream', bytes: readFileSync(real) };
   };
 }
 
