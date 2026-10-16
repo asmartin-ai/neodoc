@@ -3567,6 +3567,12 @@ const rawInline = (node) => emitInline(node);
 const LINK_ATTRS = new Set(['href', 'title']);
 const IMG_ATTRS = new Set(['src', 'alt', 'title']);
 const onlyAttrs = (node, allowed) => Object.keys(attrsOf(node)).every((k) => allowed.has(k));
+/** Marks whose spelling carries nothing but the mark itself. */
+const NO_ATTRS = new Set();
+const PRE_ATTRS = new Set(['data-lang']);
+const LI_ATTRS = new Set(['data-checked']);
+const CELL_ATTRS = new Set(['data-align']);
+const NOTE_ATTRS = new Set(['data-note']);
 
 const attrsOf = (node) => node.attrs || {};
 const hasAttrs = (node) => Object.keys(attrsOf(node)).length > 0;
@@ -3604,11 +3610,15 @@ function nodeMd(node, ctx) {
   if (node.type === 'comment') return `<!--${node.text}-->`;
   const A = attrsOf(node);
   const inline = () => inlineMd(kidsOf(node), ctx);
+  // `**x**` cannot carry an attribute, and the ones that ride here (`id`, `title`,
+  // `data-*`) are exactly what the CLI addresses blocks by: without a gate they were
+  // dropped on export, silently.
+  const bare = onlyAttrs(node, NO_ATTRS);
   switch (node.name) {
-    case 'strong': return `**${inline()}**`;
-    case 'em': return `*${inline()}*`;
-    case 'code': return codeSpan(textOf(node));
-    case 's': return `~~${inline()}~~`;
+    case 'strong': return bare ? `**${inline()}**` : rawInline(node);
+    case 'em': return bare ? `*${inline()}*` : rawInline(node);
+    case 'code': return bare ? codeSpan(textOf(node)) : rawInline(node);
+    case 's': return bare ? `~~${inline()}~~` : rawInline(node);
     case 'del':
       // A tracked deletion must not be written as `~~`, which means *strikethrough*:
       // importing it back would turn a normal `<s>` into a deletion, and
@@ -3617,7 +3627,7 @@ function nodeMd(node, ctx) {
       return rawInline(node);
     case 'ins': return ctx.comments === 'critic' ? `{++${inline()}++}` : rawInline(node);
     case 'mark':
-      if (!A['data-c']) return `==${inline()}==`;
+      if (!A['data-c']) return bare ? `==${inline()}==` : rawInline(node);
       if (ctx.comments === 'drop') return inline();
       if (ctx.comments === 'critic') {
         ctx.used.push(A['data-c']);
@@ -3626,7 +3636,7 @@ function nodeMd(node, ctx) {
       return rawInline(node);
     case 'a': return linkMd(node, ctx);
     case 'img': return imgMd(node);
-    case 'br': return ctx.solidBr ? '<br>' : '  \n';
+    case 'br': return bare ? (ctx.solidBr ? '<br>' : '  \n') : rawInline(node);
     default: return rawInline(node); // sub/sup/u/… — HTML is their markdown form
   }
 }
@@ -3693,7 +3703,9 @@ function fenceMd(node) {
   const lang = attrsOf(node)['data-lang'] || '';
   // The reader keeps the first word of the info string, and a backtick would end the
   // fence: either way the language would come back changed.
-  if (/[\s`]/.test(lang)) return rawHtml(node);
+  // The reader keeps the first word of the info string and nothing else, and a
+  // fence cannot hold an `id` at all.
+  if (/[\s`]/.test(lang) || !onlyAttrs(node, PRE_ATTRS)) return rawHtml(node);
   const text = textOf(node);
   const runs = text.match(/`{3,}/g) || [];
   const fence = '`'.repeat(Math.max(3, ...runs.map((r) => r.length + 1)));
@@ -3706,6 +3718,9 @@ function listMd(node, ctx) {
   const out = [];
   let n = 1;
   for (const li of kidsOf(node).filter((c) => isEl(c, 'li'))) {
+    // `- [x]` is the only form markdown has for an item, and `data-checked` the only
+    // attribute it can carry.
+    if (!onlyAttrs(li, LI_ATTRS)) return rawHtml(node);
     const checked = attrsOf(li)['data-checked'];
     const box = checked === undefined ? '' : checked === 'true' ? '[x] ' : '[ ] ';
     const marker = `${ordered ? `${n++}. ` : '- '}${box}`;
@@ -3739,6 +3754,12 @@ function tableMd(node, ctx) {
   // else (no `<thead>`, ragged rows, spanning cells) goes out as raw HTML.
   const cells = all.flatMap((r) => kidsOf(r));
   if (headRows.length !== 1 || cells.some((c) => attrsOf(c).colspan || attrsOf(c).rowspan || attrsOf(c).scope)) {
+    return rawHtml(node);
+  }
+  // `data-align` becomes the delimiter row; any other attribute on the table, a row
+  // or a cell has nowhere to go.
+  if (!onlyAttrs(node, NO_ATTRS) || [...kidsOf(node), ...all].some((r) => !onlyAttrs(r, NO_ATTRS))
+    || cells.some((c) => !onlyAttrs(c, CELL_ATTRS))) {
     return rawHtml(node);
   }
   const width = kidsOf(headRows[0]).length;
@@ -3781,13 +3802,14 @@ function figureMd(node, ctx) {
   const richCap = !!cap && kidsOf(cap).some((c) => c.type === 'element' && (c.name === 'em' || c.name === 'strong'));
   const capMd = cap ? inlineMd(kidsOf(cap), ctx) : '';
   const image = img ? imgMd(img) : '';
-  if (!img || !cap || !capMd || extra || richCap || /[*\n]/.test(capMd) || image.startsWith('<')) return rawHtml(node);
+  if (!img || !cap || !capMd || extra || richCap || /[*\n]/.test(capMd) || image.startsWith('<')
+    || !onlyAttrs(node, NO_ATTRS)) return rawHtml(node);
   return `${image}\n\n*${capMd}*`;
 }
 
 function asideMd(node, ctx) {
   const note = attrsOf(node)['data-note'];
-  if (note && NOTE_TO_ALERT[note]) {
+  if (note && NOTE_TO_ALERT[note] && onlyAttrs(node, NOTE_ATTRS)) {
     return quoteMd(`[!${NOTE_TO_ALERT[note]}]\n\n${sequenceMd(kidsOf(node), ctx)}`);
   }
   if (ctx.comments !== 'html') return null; // critic → anchored tail, drop → gone
@@ -3806,7 +3828,7 @@ function blockMd(node, ctx) {
     case 'p': return hasAttrs(node) ? rawHtml(node) : paraMd(paraNodeMd(kidsOf(node), ctx));
     case 'ul':
     case 'ol': return hasAttrs(node) ? rawHtml(node) : listMd(node, ctx);
-    case 'blockquote': return quoteMd(sequenceMd(kidsOf(node), ctx));
+    case 'blockquote': return hasAttrs(node) ? rawHtml(node) : quoteMd(sequenceMd(kidsOf(node), ctx));
     case 'pre': return fenceMd(node);
     case 'hr': return hasAttrs(node) ? rawHtml(node) : '---';
     case 'table': return tableMd(node, ctx);

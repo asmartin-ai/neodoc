@@ -332,6 +332,18 @@ test('attributes markdown cannot carry come back as raw HTML, not stripped', () 
     '<p><img alt="a" src="s.png" title="T"></p>',
     '<p><img alt="a" src="s.png" width="50%"></p>',
     '<p><img src="s.png"></p>',
+    '<p><strong id="x">b</strong></p>',
+    '<p><em id="x">i</em></p>',
+    '<p><code id="x">c</code></p>',
+    '<p><s id="x">x</s></p>',
+    '<p><mark id="x">m</mark></p>',
+    '<pre id="x" data-lang="js">a</pre>',
+    '<ul><li id="y">a</li></ul>',
+    '<blockquote id="q"><p>q</p></blockquote>',
+    '<figure id="f"><img alt="c" src="c.png"><figcaption>cap</figcaption></figure>',
+    '<table id="t"><thead><tr><th>h</th></tr></thead><tbody><tr><td>a</td></tr></tbody></table>',
+    '<table><thead><tr><th id="h">h</th></tr></thead><tbody><tr><td>a</td></tr></tbody></table>',
+    '<aside data-note="info" id="n"><p>n</p></aside>',
   ];
   for (const c of cases) {
     const { got, md, warnings } = roundTrip(c);
