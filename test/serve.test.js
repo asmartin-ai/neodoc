@@ -26,6 +26,8 @@ test('serve routes the editor page, its assets and the document', async (t) => {
     assert.equal((await fetch(base + path)).status, 200, `${path} must be served from the install`);
   }
 
+  assert.equal((await fetch(`${base}/favicon.ico`)).status, 204, 'no favicon 404: branded browsers log it as a console error');
+
   const doc = await fetch(`${base}/doc`);
   assert.equal(doc.status, 200);
   assert.equal((await doc.json()).name, 'doc.nd.html');

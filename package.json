@@ -33,7 +33,7 @@
     "docs"
   ],
   "scripts": {
-    "test": "node --test test/",
+    "test": "node --test",
     "test:e2e": "playwright test",
     "lint": "oxlint",
     "bundle": "node tools/bundle.js",

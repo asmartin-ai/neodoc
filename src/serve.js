@@ -48,6 +48,9 @@ export function serve({ file, port = 8765, open = false }) {
 async function handle(req, res, ctx) {
   const url = new URL(req.url, 'http://127.0.0.1');
   try {
+    // A 404 here is logged as a console error by branded Chrome/Edge; the editor
+    // has no icon, so answer politely instead of failing every clean-console test.
+    if (url.pathname === '/favicon.ico') { res.writeHead(204); return res.end(); }
     if (url.pathname === '/doc') return await doc(req, res, ctx);
     if (url.pathname === '/save' && req.method === 'POST') return await save(req, res, ctx);
     // `/` must land on the editor *page*, not on the editor's HTML served at the
