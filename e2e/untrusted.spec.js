@@ -96,3 +96,21 @@ test('an executable link does not run, and a safe document still opens', async (
   await expect(page.locator('body > h1')).toHaveText('Basic formatting');
   expectClean(noise);
 });
+
+test('a nested <head> in the body cannot smuggle a script past the refusal', async ({ page }) => {
+  const dir = await tmpDir();
+  const file = join(dir, 'nested-head.nd.html');
+  // Contradictory HTML, and `fmt` keeps it as written. Skipping any element *named*
+  // `head` (the first version of the check) skipped this whole subtree with it.
+  await writeFile(file, harness(`    <head><script>window.__pwned = 'ran';</script></head>
+    <p>Looks harmless.</p>`));
+  const noise = watchPage(page);
+
+  await page.goto(SERVERLESS_EDITOR);
+  await page.waitForFunction(() => !!window.neodocEditor);
+  await page.setInputFiles('#open-input', file);
+  await expect(page.locator('#st-state')).toContainText(/refused/i);
+  expect(await page.evaluate(() => window.__pwned)).toBeUndefined();
+  expect(await page.evaluate(() => document.body.querySelectorAll('script').length)).toBe(0);
+  expectClean(noise);
+});

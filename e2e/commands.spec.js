@@ -48,3 +48,54 @@ test('a command leaves the caret in its block, not at the top of the body', asyn
 
   expectClean(noise);
 });
+
+test('Ctrl+Z undoes a structural edit instead of deleting text from another block', async ({ page }) => {
+  const dir = await tmpDir();
+  const file = join(dir, 'changes.nd.html');
+  writeFileSync(file, DOC);
+  const noise = watchPage(page);
+
+  await page.goto(SERVERLESS_EDITOR);
+  await page.waitForFunction(() => !!window.neodocEditor);
+  await page.setInputFiles('#open-input', file);
+  await page.locator('body > h1').click();
+  await page.keyboard.press('End');
+  await page.keyboard.type('abc');
+  await page.keyboard.press('Enter');
+  await expect(page.locator('body > p')).toHaveCount(3);
+
+  // The browser's own undo history is stale after the editor moves nodes: it used to
+  // delete characters from the heading rather than undo the Enter.
+  await page.keyboard.press('Control+z');
+  await expect(page.locator('body > p')).toHaveCount(2);
+  await expect(page.locator('body > h1')).toHaveText('Changesabc');
+
+  await page.keyboard.press('Control+z');
+  await expect(page.locator('body > h1')).toHaveText('Changes');
+
+  await page.keyboard.press('Control+z');
+  await expect(page.locator('body > h1')).toHaveText('Changes');
+  await expect(page.locator('#st-status')).toContainText('nothing to undo');
+
+  expectClean(noise);
+});
+
+test('Ctrl+Z brings a folded change back', async ({ page }) => {
+  const dir = await tmpDir();
+  const file = join(dir, 'changes.nd.html');
+  writeFileSync(file, DOC);
+  const noise = watchPage(page);
+
+  await page.goto(SERVERLESS_EDITOR);
+  await page.waitForFunction(() => !!window.neodocEditor);
+  await page.setInputFiles('#open-input', file);
+  const price = page.locator('body > p').filter({ hasText: 'The price' });
+  await price.click();
+  await page.locator('button[data-cmd="accept"]').click();
+  await expect(price).toContainText('The price is twenty dollars.');
+
+  await page.keyboard.press('Control+z');
+  await expect(price).toContainText('tentwenty');
+
+  expectClean(noise);
+});

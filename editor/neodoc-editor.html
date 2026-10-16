@@ -4709,7 +4709,15 @@ const UNSAFE_IN_BODY = new Set(['script', 'style', 'link', 'base', 'meta', 'ifra
 // reported and left out, so a head <script> never reaches this page.
 const SAFE_FROM_HEAD = new Set(['meta', 'title', 'style']);
 
-const state = { name: 'untitled.nd.html', mode: 'inline', dirty: false, handle: null, suggest: false, embed: true };
+const state = { name: 'untitled.nd.html', mode: 'inline', dirty: false, handle: null, suggest: false, embed: true, undo: [] };
+
+// ponytail: a count, not a byte budget — a very large document costs one copy of
+// itself per entry. Upgrade to a byte-bounded ring if documents get big.
+const UNDO_LIMIT = 50;
+// Typing is coalesced into one entry per pause: 50 entries of per-keystroke history
+// would be a serialization per keystroke, which a big document cannot afford.
+const TYPING_PAUSE = 500;
+let lastSnapshotAt = 0;
 
 // Caret anchors. A browser resolves a block-final range to the end of the last
 // *text* position, so once an input rule creates `<strong>x</strong>` at the end of
@@ -4802,18 +4810,27 @@ function status(message) {
   $('#st-state').textContent = message;
 }
 
-/** Body elements this page must not adopt, by name. */
+/**
+ * Body elements this page must not adopt, by name.
+ *
+ * Walks the `<body>` subtree only. Skipping anything *named* `head` (the first
+ * version of this) is a bypass: `<body><head><script>…` is contradictory HTML that
+ * `fmt` keeps as written, and skipping that subtree let a document with a script in
+ * it through the refusal.
+ */
 function unsafeBodyElements(root) {
+  const html = (root.children || []).find((c) => c.type === 'element' && c.name === 'html');
+  const body = html && (html.children || []).find((c) => c.name === 'body');
+  if (!body) return [];
   const found = new Set();
   (function walk(node) {
     for (const c of node.children || []) {
       if (c.type !== 'element') continue;
       const name = RENAMES[c.name] || String(c.name).toLowerCase();
-      if (name === 'head') continue;
       if (UNSAFE_IN_BODY.has(name)) found.add(name);
       walk(c);
     }
-  })(root);
+  })(body);
   return [...found];
 }
 
@@ -4894,6 +4911,37 @@ function sweepEditorNodes() {
 }
 
 /**
+ * Remember the document as it is *now*, so Ctrl+Z can come back to it.
+ *
+ * The browser's own undo history cannot be used: a command replaces the whole body,
+ * which leaves that history pointing at detached nodes, and the browser then undoes
+ * the wrong thing — measured: type, Enter, Ctrl+Z twice removed two characters from a
+ * different block instead of undoing the Enter.
+ */
+function snapshot(text) {
+  const now = Date.now();
+  if (now - lastSnapshotAt < TYPING_PAUSE && text === undefined) return;
+  const current = text === undefined ? canonicalText().text : text;
+  lastSnapshotAt = now;
+  if (state.undo[state.undo.length - 1] === current) return;
+  state.undo.push(current);
+  if (state.undo.length > UNDO_LIMIT) state.undo.shift();
+}
+
+/** Step the document back one snapshot, keeping the caret in its block. */
+function undo() {
+  const text = state.undo.pop();
+  if (text === undefined) { status('nothing to undo'); return; }
+  const keep = caretMark();
+  applyDocument(text);
+  state.dirty = true;
+  refresh();
+  restoreCaret(keep);
+  status('undone — '
+    + (state.undo.length ? `${state.undo.length} more step(s)` : 'back to the last saved state'));
+}
+
+/**
  * Where the caret is: the canonical selector of the block it sits in plus the number
  * of characters into that block. `applyDocument` rebuilds the whole body, so a
  * command that changed something has to put the caret back itself — without this,
@@ -4932,6 +4980,7 @@ function restoreCaret(mark) {
 function mutate(fn) {
   const keep = caretMark();
   const { text: src } = canonicalText();
+  snapshot(src);
   const tree = parse(src).root;
   const result = fn(tree);
   applyDocument(serialize(tree));
@@ -4952,6 +5001,7 @@ async function openText(name, src, handle = null) {
   state.name = name || state.name;
   state.handle = handle;
   state.dirty = false;
+  state.undo.length = 0;
   applyDocument(canonical);
   const note = canonical === src ? 'already canonical' : 'rewritten to canonical form';
   status(`opened ${state.name} (${note}, ${warnings.length} warning(s))`);
@@ -5160,6 +5210,7 @@ function runInlineRule() {
 function onInput(e) {
   if (e && e.inputType && !/^insert(Text|CompositionText|FromComposition)$/.test(e.inputType)) return;
   if (state.suggest) return; // suggest mode inserts its own nodes
+  snapshot();
   runBlockRule();
   runInlineRule();
   edited();
@@ -5277,6 +5328,7 @@ function ancestorNamed(node, name) {
 // -------------------------------------------------------------------- keyboard
 
 function onEnter(e) {
+  snapshot();
   const r = caretRange();
   if (!r) return;
   e.preventDefault();
@@ -5359,6 +5411,7 @@ function insertNewline() {
 }
 
 function onShiftEnter(e) {
+  snapshot();
   e.preventDefault();
   const r = caretRange();
   const block = r && blockOf(r.startContainer);
@@ -5366,6 +5419,7 @@ function onShiftEnter(e) {
 }
 
 function onBackspace(e) {
+  snapshot();
   const r = caretRange();
   if (!r || !r.collapsed || state.suggest) return;
   const block = blockOf(r.startContainer);
@@ -5400,6 +5454,7 @@ function onBackspace(e) {
 }
 
 function onTab(e) {
+  snapshot();
   const r = caretRange();
   const block = r && blockOf(r.startContainer);
   if (!block || block.nodeName !== 'LI') return;
@@ -5622,6 +5677,7 @@ function markdownNodes(md) {
   return sanitizedNodes(html);
 }
 function onPaste(e) {
+  snapshot();
   const dt = e.clipboardData;
   if (!dt) return;
   const html = dt.getData('text/html');
@@ -5912,6 +5968,16 @@ document.addEventListener('keydown', (e) => {
     return;
   }
   const code = e.code;
+  const key = e.key.toLowerCase();
+  if (key === 'z' || key === 'y') {
+    // A comment box (inside the chrome) keeps the browser's own undo, which is the
+    // right one for a text field; the document's history is ours.
+    if (CHROME.contains(document.getSelection() && document.getSelection().anchorNode)) return;
+    e.preventDefault();
+    if (key === 'z' && !e.shiftKey) undo();
+    else status('redo is not available — the editor keeps undo only');
+    return;
+  }
   if (e.altKey) {
     if (/^Digit[1-6]$/.test(code)) { e.preventDefault(); return COMMANDS[`h${code.slice(5)}`](); }
     if (code === 'KeyM') { e.preventDefault(); return commentOnSelection(); }
