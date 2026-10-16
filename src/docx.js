@@ -12,7 +12,7 @@
 // (or a 480×320 default) instead of reading the real pixel size, because we do
 // not decode image headers; upgrade when layout of untagged images matters.
 
-import { HEADINGS, isEl, textOf } from './tree.js';
+import { BLOCK, HEADINGS, isEl, textOf } from './tree.js';
 import { normalizePre } from './format.js';
 
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
@@ -354,6 +354,10 @@ function list(node, ctx, ordered, ilvl, numId) {
   // any other list that shares a numId, so separate `<ol>`s must not share one.
   // numId 1 is always the bullet list, defined in numberingXml.
   if (!numId) numId = ordered ? ++ctx.numSeq : 1;
+  // Word expresses `<ol start>` as a start override on that list's own instance.
+  const start = /^\d+$/.test(String(node.attrs.start ?? '')) ? Number(node.attrs.start) : null;
+  if (start) ctx.numStarts.set(numId, start);
+  if (node.attrs.reversed !== undefined) ctx.warn('a reversed list is not expressible in Word: it counts up');
   let out = '';
 
   for (const li of (node.children || []).filter((c) => isEl(c, 'li'))) {
@@ -386,22 +390,75 @@ function list(node, ctx, ordered, ilvl, numId) {
   return out;
 }
 
-function tableRow(tr, ctx, cols) {
+/** A `colspan`/`rowspan`, bounded: an unparsable or absurd one used to reach the XML. */
+const SPAN_MAX = 1000;
+const GRID_MAX = 2000;
+
+function spanOf(value, attr, ctx) {
+  const n = Number.parseInt(value ?? '1', 10);
+  if (!Number.isFinite(n) || n < 1) return 1;
+  if (n > SPAN_MAX) {
+    ctx.warn(`${attr}="${value}" is clamped to ${SPAN_MAX}`);
+    return SPAN_MAX;
+  }
+  return n;
+}
+
+/**
+ * Where every cell lands, `rowspan` included: one array per row, holding the cell that
+ * starts there or `{ cont: true }` for a slot an earlier row's `rowspan` covers. Without
+ * this, a spanning cell shifted every later cell of the following rows.
+ */
+function cellGrid(rows, ctx) {
+  const grid = [];
+  rows.forEach((tr, r) => {
+    if (!grid[r]) grid[r] = [];
+    let c = 0;
+    for (const cell of (tr.children || []).filter((x) => isEl(x, 'td') || isEl(x, 'th'))) {
+      while (grid[r][c] !== undefined) c += 1;
+      const colspan = spanOf(cell.attrs.colspan, 'colspan', ctx);
+      const rowspan = spanOf(cell.attrs.rowspan, 'rowspan', ctx);
+      for (let dr = 0; dr < rowspan; dr += 1) {
+        if (!grid[r + dr]) grid[r + dr] = [];
+        for (let dc = 0; dc < colspan; dc += 1) {
+          grid[r + dr][c + dc] = dr || dc ? { cont: true } : { cell, colspan, rowspan };
+        }
+      }
+      c += colspan;
+    }
+  });
+  return grid;
+}
+
+function tableRow(slots, ctx, cols, style) {
   let cells = '';
 
-  for (const cell of (tr.children || []).filter((c) => isEl(c, 'td') || isEl(c, 'th'))) {
+  for (let c = 0; c < cols; c += 1) {
+    const slot = slots[c];
+    if (slot && slot.cont) { cells += '<w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p/></w:tc>'; continue; }
+    if (!slot) { cells += '<w:tc><w:tcPr><w:tcW w:w="0" w:type="auto"/></w:tcPr><w:p/></w:tc>'; continue; }
+
+    // The spans were resolved (and clamped, and reported) once, while building the grid.
+    const { cell, colspan, rowspan } = slot;
     const head = cell.name === 'th';
-    const span = Math.max(1, Number.parseInt(cell.attrs.colspan || '1', 10) || 1);
     const align = ALIGN.has(cell.attrs['data-align']) ? cell.attrs['data-align'] : '';
+    const rPr = head ? { ...style, b: 1 } : style;
 
     const tcPr =
       `<w:tcW w:w="${Math.floor(9360 / cols)}" w:type="dxa"/>` +
-      (span > 1 ? `<w:gridSpan w:val="${span}"/>` : '') +
+      (colspan > 1 ? `<w:gridSpan w:val="${colspan}"/>` : '') +
+      (rowspan > 1 ? '<w:vMerge w:val="restart"/>' : '') +
       (head ? '<w:shd w:val="clear" w:color="auto" w:fill="D9D9D9"/>' : '') +
       '<w:vAlign w:val="top"/>';
 
-    const runs = inlines(trimInline(cell.children || []), ctx, head ? { b: 1 } : {});
-    cells += `<w:tc><w:tcPr>${tcPr}</w:tcPr>${para(align ? { jc: align } : {}, runs)}</w:tc>`;
+    // A cell may hold blocks and each is its own paragraph: gluing them into one run of
+    // text turned `<td><p>a</p><p>b</p></td>` into "ab".
+    const kids = cell.children || [];
+    const content = kids.some((k) => k.type === 'element' && BLOCK.has(k.name))
+      ? blocks(kids, ctx, rPr) || '<w:p/>'
+      : para(align ? { jc: align } : {}, inlines(trimInline(kids), ctx, rPr));
+
+    cells += `<w:tc><w:tcPr>${tcPr}</w:tcPr>${content}</w:tc>`;
   }
 
   return `<w:tr>${cells}</w:tr>`;
@@ -417,24 +474,20 @@ function table(node, ctx) {
     }
   }
 
-  let cols = 1;
-
-  if (rows[0]) {
-    cols = (rows[0].children || []).reduce(
-      (n, c) => (isEl(c, 'td') || isEl(c, 'th') ? n + Math.max(1, Number.parseInt(c.attrs.colspan || '1', 10) || 1) : n),
-      0,
-    ) || 1;
-  }
+  const grid = cellGrid(rows, ctx);
+  const wanted = Math.max(1, ...grid.map((r) => r.length));
+  if (wanted > GRID_MAX) ctx.warn(`a table ${wanted} columns wide is clamped to ${GRID_MAX}`);
+  const cols = Math.min(wanted, GRID_MAX);
 
   const borders = '<w:tblBorders>'
     + ['top', 'left', 'bottom', 'right', 'insideH', 'insideV']
       .map((s) => `<w:${s} w:val="single" w:sz="4" w:space="0" w:color="auto"/>`).join('')
     + '</w:tblBorders>';
 
-  const grid = `<w:tblGrid>${'<w:gridCol/>'.repeat(cols)}</w:tblGrid>`;
-  const body = rows.map((r) => tableRow(r, ctx, cols)).join('');
+  const colGrid = `<w:tblGrid>${'<w:gridCol/>'.repeat(cols)}</w:tblGrid>`;
+  const body = grid.map((slots) => tableRow(slots, ctx, cols, {})).join('');
 
-  return `<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/>${borders}</w:tblPr>${grid}${body}</w:tbl>`;
+  return `<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/>${borders}</w:tblPr>${colGrid}${body}</w:tbl>`;
 }
 
 function figure(node, ctx) {
@@ -708,7 +761,7 @@ function stylesXml(lang) {
     + '</w:styles>';
 }
 
-function numberingXml(count) {
+function numberingXml(count, starts = new Map()) {
   const lvl = (ilvl, numFmt, text) =>
     `<w:lvl w:ilvl="${ilvl}"><w:start w:val="1"/><w:numFmt w:val="${numFmt}"/>`
     + `<w:lvlText w:val="${text}"/><w:lvlJc w:val="left"/>`
@@ -720,8 +773,13 @@ function numberingXml(count) {
 
   // `w:num` instances are per list, so that two separate lists do not share a
   // counting sequence: numId 1 is the bullet list, 2..count are ordered lists.
-  const nums = Array.from({ length: count }, (_, i) =>
-    `<w:num w:numId="${i + 1}"><w:abstractNumId w:val="${i === 0 ? 0 : 1}"/></w:num>`).join('');
+  const nums = Array.from({ length: count }, (_, i) => {
+    const id = i + 1;
+    const start = starts.get(id);
+    return `<w:num w:numId="${id}"><w:abstractNumId w:val="${i === 0 ? 0 : 1}"/>`
+      + (start ? `<w:lvlOverride w:ilvl="0"><w:startOverride w:val="${start}"/></w:lvlOverride>` : '')
+      + '</w:num>';
+  }).join('');
 
   return XML_DECL + `<w:numbering xmlns:w="${W}">`
     + abstract(0, 'bullet', ['\u2022', '\u25cb', '\u25aa'])
@@ -810,6 +868,7 @@ function makeContext(opts) {
     marks: new Set(),        // data-c ids that have an anchor in the body
     commentIds: new Map(),   // data-c id → numeric Word comment id
     commentBodies: new Map(),// numeric id → comment part body
+    numStarts: new Map(),    // numId → the `<ol start>` value of that list
     consumedAsides: new Set(),
     changes: 0,
     draws: 0,
@@ -915,7 +974,7 @@ export async function toDocx(bodyNode, opts = {}) {
     { name: 'docProps/app.xml', data: enc.encode(appXml()) },
     { name: 'word/document.xml', data: enc.encode(document) },
     { name: 'word/styles.xml', data: enc.encode(stylesXml(opts.lang || 'en')) },
-    { name: 'word/numbering.xml', data: enc.encode(numberingXml(ctx.numSeq)) },
+    { name: 'word/numbering.xml', data: enc.encode(numberingXml(ctx.numSeq, ctx.numStarts)) },
     { name: 'word/settings.xml', data: enc.encode(settingsXml()) },
     { name: 'word/_rels/document.xml.rels', data: enc.encode(relsXml(docRels)) },
   ];

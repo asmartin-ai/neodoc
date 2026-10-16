@@ -401,3 +401,45 @@ test('the output does not depend on the host clock, time zone or locale', async 
     assert.equal(src.includes(banned), false, `src/docx.js must not use ${banned}`);
   }
 });
+
+test('rowspan becomes a vertical merge and keeps later cells in their columns', async () => {
+  const files = unzip(await toDocx(body('<table><tbody>'
+    + '<tr><td rowspan="2">a</td><td>b</td></tr>'
+    + '<tr><td>c</td></tr>'
+    + '</tbody></table>')));
+  const doc = text(files.get('word/document.xml'));
+  assert.match(doc, /<w:vMerge w:val="restart"\/>/);
+  assert.match(doc, /<w:vMerge\/>/);
+  // Two declared cells plus the continuation slot: the cell of the second row used to
+  // land in column 1 because nothing knew the first row spanned it.
+  assert.equal((doc.match(/<w:tc>/g) || []).length, 4);
+  assert.match(doc, /<w:t>c<\/w:t>/);
+});
+
+test('an ordered list keeps its start value', async () => {
+  const files = unzip(await toDocx(body('<ol start="3"><li>a</li></ol>')));
+  assert.match(text(files.get('word/numbering.xml')),
+    /<w:lvlOverride w:ilvl="0"><w:startOverride w:val="3"\/><\/w:lvlOverride>/);
+});
+
+test('a cell holding two paragraphs keeps both', async () => {
+  const files = unzip(await toDocx(body('<table><tbody><tr><td><p>a</p><p>b</p></td></tr></tbody></table>')));
+  const doc = text(files.get('word/document.xml'));
+  assert.match(doc, /<w:t>a<\/w:t>/);
+  assert.match(doc, /<w:t>b<\/w:t>/, 'the second paragraph was glued onto the first');
+});
+
+test('an absurd span is clamped instead of crashing the command', async () => {
+  const warnings = [];
+  const files = unzip(await toDocx(body('<table><tbody><tr><td colspan="999999999">a</td></tr></tbody></table>'), { warnings }));
+  assert.equal(warnings.length, 1, warnings.join(' | '));
+  assert.match(warnings[0], /clamped/);
+  assert.match(text(files.get('word/document.xml')), /<w:gridSpan w:val="1000"\/>/);
+});
+
+test('a reversed list is reported, because Word cannot count down', async () => {
+  const warnings = [];
+  await toDocx(body('<ol reversed><li>a</li></ol>'), { warnings });
+  assert.equal(warnings.length, 1, warnings.join(' | '));
+  assert.match(warnings[0], /reversed/);
+});

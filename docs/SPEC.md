@@ -263,8 +263,8 @@ neodoc css
   Comments: `--comments=html` (default) emits `<mark data-c>`/`<aside data-thread>`
   verbatim so nothing is lost; `critic` emits `{==text==}{>>author: text<<}`;
   `drop` strips them. Inline `id`s are preserved as `<a id>` anchors when present.
-- **→ docx**: `w:p`/`w:tbl` with a reference styles doc (built in by default,
-  overridable). Images become `word/media/*`. Comment anchors become real Word
+- **→ docx**: `w:p`/`w:tbl` with a styles part the writer defines itself (no
+  reference document is read, and there is no flag to point it at one). Images become `word/media/*`. Comment anchors become real Word
   comments (`word/comments.xml`, `commentRangeStart/End`). `ins`/`del` become real
   tracked changes (`w:ins`/`w:del`) with author and date. `data-lang` becomes a
   "Neodoc Code" paragraph style. No loss of text content.
