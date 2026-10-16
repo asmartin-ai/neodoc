@@ -50,11 +50,16 @@ test('the CLI entry point is a portable shebang script', () => {
   assert.ok(!source.includes('\r'), 'bin/neodoc.js contains CRLF');
 });
 
-test('every relative path in the CLI and server goes through node:path', () => {
+test('no first-party file derives a filesystem path from URL.pathname', () => {
   // A raw `new URL(...).pathname` yields `/C:/…` on Windows; fileURLToPath does not.
-  for (const file of ['cli.js', 'serve.js']) {
-    const source = codeOnly(readFileSync(join(ROOT, 'src', file), 'utf8'));
-    assert.equal(/new URL\([^)]*\)\.pathname/.exec(source), null, `src/${file} breaks on Windows paths`);
+  const files = [
+    ...readdirSync(join(ROOT, 'src')).map((f) => `src/${f}`),
+    ...readdirSync(join(ROOT, 'test')).map((f) => `test/${f}`),
+    'tools/bundle.js',
+  ];
+  for (const file of files) {
+    const source = codeOnly(readFileSync(join(ROOT, file), 'utf8'));
+    assert.equal(/new URL\([^)]*\)\.pathname/.exec(source), null, `${file} breaks on Windows paths`);
   }
 });
 

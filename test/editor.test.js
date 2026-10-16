@@ -9,7 +9,7 @@ import { bundle } from '../tools/bundle.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
-const FILE = new URL('../editor/neodoc-editor.html', import.meta.url).pathname;
+const FILE = fileURLToPath(new URL('../editor/neodoc-editor.html', import.meta.url));
 const read = () => readFileSync(FILE, 'utf8');
 
 test('the committed self-contained editor matches the modules it is built from', () => {

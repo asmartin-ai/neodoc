@@ -3,13 +3,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { format } from '../src/format.js';
 import { lint } from '../src/lint.js';
 import { parse } from '../src/parse.js';
 import { queryAll } from '../src/select.js';
 import { descendants, pathOf } from '../src/tree.js';
 
-const DIR = new URL('../fixtures/', import.meta.url).pathname;
+const DIR = fileURLToPath(new URL('../fixtures/', import.meta.url));
 const hasStyle = (text) => /<style[\s>]/i.test(text);
 const read = (path) => readFileSync(path, 'utf8');
 
