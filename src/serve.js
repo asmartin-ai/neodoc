@@ -118,7 +118,16 @@ async function handle(req, res, ctx) {
 }
 
 async function doc(req, res, ctx) {
-  const text = await readFile(ctx.target, 'utf8');
+  const bytes = await readFile(ctx.target);
+  const text = bytes.toString('utf8');
+  // The editor writes back what it was served, so serving a decode that already lost
+  // bytes (U+FFFD in place of whatever they were) would destroy them on the next
+  // save. Refuse, exactly as the CLI does, and let the message say why.
+  if (!Buffer.from(text, 'utf8').equals(bytes)) {
+    return send(res, 415, JSON.stringify({
+      error: `${basename(ctx.target)} is not valid UTF-8 — saving it from here would replace those bytes`,
+    }), { 'content-type': TYPES['.json'] });
+  }
   send(res, 200, JSON.stringify({
     path: '',
     name: basename(ctx.target),

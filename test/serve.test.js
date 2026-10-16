@@ -38,3 +38,20 @@ test('serve routes the editor page, its assets and the document', async (t) => {
 
   assert.equal((await fetch(`${base}/../../etc/passwd`)).status, 404, 'path traversal must be refused');
 });
+
+test('serve refuses a document it cannot hand over intact', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'neodoc-serve-'));
+  const file = join(dir, 'latin1.nd.html');
+  const original = Buffer.concat([
+    Buffer.from('<!doctype html><html><body><p>caf'),
+    Buffer.from([0xe9]), // latin-1 'é': served as U+FFFD it would be written back that way
+    Buffer.from('</p></body></html>'),
+  ]);
+  writeFileSync(file, original);
+
+  const server = await serve({ file, port: 0 });
+  t.after(() => server.close());
+  const res = await fetch(`http://127.0.0.1:${server.address().port}/doc`);
+  assert.equal(res.status, 415, 'the editor must not be handed a decode that already lost bytes');
+  assert.match((await res.json()).error, /not valid UTF-8/);
+});

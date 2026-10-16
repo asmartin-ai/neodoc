@@ -365,7 +365,12 @@ async function loadServed() {
   if (location.protocol === 'file:') return false;
   try {
     const res = await fetch('/doc');
-    if (!res.ok) return false;
+    if (!res.ok) {
+      // The server refuses a document it cannot hand over intact (see serve.js).
+      const why = res.headers.get('content-type')?.includes('json') ? (await res.json()).error : null;
+      if (why) status(why);
+      return false;
+    }
     const doc = await res.json();
     state.mode = doc.mode === 'none' ? 'none' : 'inline';
     await openText(doc.name, doc.text);
