@@ -92,12 +92,14 @@ test('the not-canonical message counts the lines that actually differ', () => {
   assert.match(res.stdout, /not canonical \(2 line\(s\) differ/);
 });
 
-test('`note add --on ""` is refused instead of annotating the whole block', () => {
+test('an empty or blank --on is refused instead of annotating the whole block', () => {
   const file = tmpFile('doc.nd.html', DOC);
   const before = readFileSync(file, 'utf8');
-  const res = cli(['note', 'add', file, 'body > p', '--on', '', '--say', 'x']);
-  assert.equal(res.status, 2, 'an empty quote selector is a usage error');
-  assert.equal(readFileSync(file, 'utf8'), before);
+  for (const on of ['', ' ']) {
+    const res = cli(['note', 'add', file, 'body > p', '--on', on, '--say', 'x']);
+    assert.equal(res.status, 2, `--on ${JSON.stringify(on)} is a usage error`);
+    assert.equal(readFileSync(file, 'utf8'), before);
+  }
 });
 
 test('a value that looks like a flag is kept; a known flag still means "no value"', () => {

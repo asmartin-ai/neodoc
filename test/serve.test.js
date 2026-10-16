@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import http from 'node:http';
 import { serve } from '../src/serve.js';
 import { format } from '../src/format.js';
 
@@ -54,4 +55,26 @@ test('serve refuses a document it cannot hand over intact', async (t) => {
   const res = await fetch(`http://127.0.0.1:${server.address().port}/doc`);
   assert.equal(res.status, 415, 'the editor must not be handed a decode that already lost bytes');
   assert.match((await res.json()).error, /not valid UTF-8/);
+});
+
+test('the loopback Host allow-list accepts a bracketed IPv6 form with a port', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'neodoc-serve-'));
+  const file = join(dir, 'doc.nd.html');
+  writeFileSync(file, format('<!doctype html><html><head><title>x</title></head><body><p>hi</p></body></html>', { style: 'none' }).text);
+  const server = await serve({ file, port: 0 });
+  t.after(() => server.close());
+  const port = server.address().port;
+  const status = (host) => new Promise((resolve) => {
+    // `fetch` cannot set Host, and these are all the same address.
+    const req = http.request({ host: '127.0.0.1', port, path: '/doc', headers: { host } }, (res) => {
+      res.resume();
+      resolve(res.statusCode);
+    });
+    req.on('error', () => resolve(0));
+    req.end();
+  });
+  assert.equal(await status(`[::1]:${port}`), 200, 'bracketed IPv6 with a port');
+  assert.equal(await status('[::1]'), 200, 'bracketed IPv6 without one');
+  assert.equal(await status(`127.0.0.1:${port}`), 200);
+  assert.equal(await status(`evil.example:${port}`), 403);
 });

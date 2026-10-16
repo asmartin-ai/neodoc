@@ -44,9 +44,12 @@ const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]', '::1']);
  *  gives a hostile page the browser's own origin for `/doc`. */
 function hostAllowed(host, port) {
   const text = String(host ?? '');
-  const cut = text.startsWith('[') ? text.indexOf(']:') : text.lastIndexOf(':');
-  const name = cut === -1 ? text : text.slice(0, cut + (text.startsWith('[') ? 1 : 0));
-  const chosen = cut === -1 ? undefined : text.slice(cut + 1);
+  const bracketed = text.startsWith('[');
+  const cut = bracketed ? text.indexOf(']:') : text.lastIndexOf(':');
+  const name = cut === -1 ? text : text.slice(0, cut + (bracketed ? 1 : 0));
+  // `[::1]:8080` splits at `]:`, so the port starts one character after that — one
+  // further than the bare `host:port` form, where the colon *is* the separator.
+  const chosen = cut === -1 ? undefined : text.slice(cut + (bracketed ? 2 : 1));
   return LOOPBACK.has(name.toLowerCase()) && (chosen === undefined || chosen === String(port));
 }
 

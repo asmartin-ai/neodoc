@@ -313,6 +313,17 @@ test('a percentage width is not read as a pixel count', async () => {
     '50% keeps the 480×320 default instead of becoming 50px');
 });
 
+test('a comment date that is not ISO-8601 falls back instead of reaching the XML', async () => {
+  const files = unzip(await toDocx(body(
+    '<p>see <mark data-c="c1">this</mark></p>'
+    + '<aside data-thread="c1" data-state="open"><p data-author="ada" data-at="yesterday">why?</p></aside>',
+  )));
+  const comments = text(files.get('word/comments.xml'));
+  assert.match(comments, /w:author="ada"/);
+  assert.match(comments, /w:date="\d{4}-\d{2}-\d{2}T[\d:.]+Z?"/, `not a date: ${comments.match(/w:date="[^"]*"/)}`);
+  assert.ok(!comments.includes('yesterday'), 'the bad value must not be written as a date');
+});
+
 test('text is escaped and edge whitespace preserved', async () => {
   const doc = text(unzip(await toDocx(body('<p>a &amp; b &lt;c&gt; d</p>'))).get('word/document.xml'));
   assert.match(doc, /<w:t>a &amp; b &lt;c&gt; d<\/w:t>/);

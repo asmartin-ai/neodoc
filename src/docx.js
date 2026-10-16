@@ -513,7 +513,7 @@ function commentXml(aside, id, ctx) {
   const paras = (aside.children || []).filter((c) => isEl(c, 'p'));
   const first = paras[0] || aside;
   const author = first.attrs['data-author'] || aside.attrs['data-author'] || ctx.opts.author || 'Unknown';
-  const date = first.attrs['data-at'] || aside.attrs['data-at'] || FIXED_DATE;
+  const date = isoDate(first.attrs['data-at'] || aside.attrs['data-at'], FIXED_DATE);
 
   const bodies = (paras.length ? paras : [aside]).map((p, i) => {
     const replyAuthor = i > 0 ? p.attrs['data-author'] : '';
