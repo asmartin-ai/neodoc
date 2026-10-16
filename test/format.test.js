@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { format, formatFragment, normalizePre } from '../src/format.js';
 import { lint } from '../src/lint.js';
+import { parse } from '../src/parse.js';
 
 /** Canonical text without the embedded stylesheet (keeps expectations readable). */
 const fmt = (s) => format(s, { style: 'none' }).text;
@@ -162,6 +163,46 @@ test('an attribute value SPEC §3 fixes as an enum is checked', () => {
   assert.deepEqual(values.map((f) => f.fixable), [false, false, false], 'fmt does not rewrite a value');
   const good = lint(doc('<ul><li data-checked="true">a</li></ul><p><mark data-c="c1">x</mark></p><aside data-thread="c1" data-state="open" data-note="warn"><p data-author="a">x</p></aside>'));
   assert.deepEqual(good.filter((f) => f.rule === 'attr-value'), []);
+});
+
+test('deep nesting is reported, not a crash', () => {
+  const deep = (n) => `<!doctype html><html><body>${'<section>'.repeat(n)}<p>x</p>${'</section>'.repeat(n)}</body></html>`;
+  // Recursive walkers used to end in "Maximum call stack size exceeded" with exit 2.
+  const once = fmt(deep(5000));
+  assert.equal(fmt(once), once, 'a capped document is still a fixpoint');
+  assert.match(once, />x</, 'the content survives where it was');
+  assert.ok(parse(deep(5000)).errors.some((e) => /nesting deeper/.test(e.message)), 'the cap is reported');
+  assert.ok((once.match(/<section>/g) || []).length < 600, 'the wrappers past the cap are gone');
+  assert.equal(parse(fmt(deep(400))).errors.length, 0, 'anything inside the cap is untouched');
+});
+
+test('head placement: content moves to the body, metadata stays, nothing is dropped', () => {
+  const doc = (head, body = '<p>y</p>') => `<!doctype html><html data-neodoc="1" lang="en"><head>${head}</head><body>${body}</body></html>`;
+  const pre = '<meta charset="utf-8"><title>t</title>';
+  // A `<p>` written in the head is content: a browser moves it into the body, and no
+  // stylesheet hides the head, so leaving it there would render it above the document.
+  const junk = doc(`${pre}<p>junk</p>`);
+  assert.match(fmt(junk).split('<body>')[1], /<p>junk<\/p>/);
+  assert.deepEqual(lint(junk).filter((f) => f.rule === 'misplaced-body').map((f) => f.fixable), [true]);
+  // A `<meta>` with nothing to declare is kept and reported, not deleted.
+  const bare = doc(`${pre}<meta http-equiv="content-type" content="text/html; charset=utf-8">`);
+  assert.match(fmt(bare).split('</head>')[0], /http-equiv="content-type"/);
+  assert.equal(lint(fmt(bare)).filter((f) => f.rule === 'meta-unused').length, 1);
+  // A second head is malformed; its children are not thrown away with it.
+  const two = '<!doctype html><html data-neodoc="1" lang="en"><head><title>t</title></head>'
+    + '<head><meta name="author" content="k"></head><body><p>y</p></body></html>';
+  assert.match(fmt(two).split('</head>')[0], /name="author"/);
+  assert.equal(fmt(two), fmt(fmt(two)), 'and the result is a fixpoint');
+  assert.deepEqual(lint(fmt(two)), []);
+});
+
+test('a finding fmt cannot repair is not advertised as fixable', () => {
+  const doc = '<!doctype html><html data-neodoc="1" lang="en"><head><meta charset="utf-8"><title>t</title>'
+    + '<foo>x</foo></head><body><p>y</p></body></html>';
+  const findings = lint(doc).filter((f) => f.rule === 'vocab');
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].fixable, false, 'fmt keeps an unknown element (invariant 5)');
+  assert.equal(fmt(fmt(doc)), fmt(doc));
 });
 
 test('a comment between two text runs stays inline', () => {

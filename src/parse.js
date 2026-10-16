@@ -9,6 +9,20 @@ import { decodeEntities } from './entities.js';
 const RAW_TEXT = new Set(['style', 'script', 'pre', 'textarea', 'title']);
 const MODE = { pre: 'pre', style: 'raw', script: 'raw', textarea: 'raw' };
 
+/**
+ * How deep the tree may nest. Past this a start tag is dropped (and reported), because
+ * every consumer of the tree — `normalizeElement`, `emitBlock`, the editor's
+ * `treeToDom` — is recursive, and 5 000 levels of `<section>` used to end as
+ * `RangeError: Maximum call stack size exceeded` with exit code 2. Browsers cap nesting
+ * too; the content stays where it is, only the extra wrappers are gone.
+ */
+const MAX_DEPTH = 512;
+
+/** Elements that are document scaffolding, not content nesting: the depth the cap
+ *  counts is the one a document author writes, so the cap is a fixpoint — re-parsing
+ *  `fmt`'s own output cannot exceed it and drop a level more. */
+const SCAFFOLD = new Set(['#root', 'html', 'head', 'body']);
+
 const IMPLIED_END = {
   // HTML closes an open `p` before any of its "special" elements (and before `li`/`dd`
   // /`dt`). Elements outside the vocabulary are kept by `fmt`, so the list includes
@@ -113,6 +127,8 @@ export function parse(src) {
   const errors = [];
   const root = { type: 'element', name: '#root', attrs: {}, children: [], pos: 0 };
   const stack = [root];
+  const dropped = []; // names of start tags dropped for depth
+  let depth = 0;      // open elements that are not scaffolding
   const n = src.length;
   let lower = '';
   const lowerOf = () => (lower ||= src.toLowerCase());
@@ -135,8 +151,8 @@ export function parse(src) {
   const closeImplied = (incoming) => {
     while (stack.length > 1) {
       const set = IMPLIED_END[parent().name];
-      if (set && set.has(incoming)) stack.pop();
-      else break;
+      if (!set || !set.has(incoming)) break;
+      if (!SCAFFOLD.has(stack.pop().name)) depth -= 1;
     }
   };
 
@@ -170,10 +186,18 @@ export function parse(src) {
       const m = scan(ENDTAG_RE, src, i);
       if (!m) { err('malformed end tag', i); pushText('<', i); i++; continue; }
       const name = m[1].toLowerCase();
+      if (dropped.length && dropped[dropped.length - 1] === name) {
+        dropped.pop(); // the end tag of a start tag that was dropped for depth
+        i += m[0].length;
+        continue;
+      }
       let k = stack.length - 1;
       while (k > 0 && stack[k].name !== name) k--;
       if (k === 0) err(`stray end tag </${name}>`, i);
-      else stack.length = k;
+      else {
+        for (let j = stack.length - 1; j >= k; j -= 1) if (!SCAFFOLD.has(stack[j].name)) depth -= 1;
+        stack.length = k;
+      }
       i += m[0].length;
       continue;
     }
@@ -181,6 +205,13 @@ export function parse(src) {
     const t = readTag(src, i);
     if (!t.name) { err('malformed tag', i); pushText('<', i); i++; continue; }
     if (t.stray) err('malformed attribute dropped', i);
+    if (depth >= MAX_DEPTH) {
+      // Record the name so its own end tag closes nothing, and keep the content.
+      err(`nesting deeper than ${MAX_DEPTH} levels is not represented`, i);
+      if (!VOID.has(t.name) && !t.selfClosing) dropped.push(t.name);
+      i = t.end;
+      continue;
+    }
     closeImplied(t.name);
     const node = { type: 'element', name: t.name, attrs: t.attrs, children: [], pos: i };
     parent().children.push(node);
@@ -194,7 +225,10 @@ export function parse(src) {
       else { i = src.indexOf('>', close); i = i === -1 ? n : i + 1; }
       continue;
     }
-    if (!VOID.has(t.name) && !t.selfClosing) stack.push(node);
+    if (!VOID.has(t.name) && !t.selfClosing) {
+      if (!SCAFFOLD.has(t.name)) depth += 1;
+      stack.push(node);
+    }
   }
 
   return { root, errors };

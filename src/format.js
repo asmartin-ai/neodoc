@@ -9,7 +9,7 @@
 import { parse } from './parse.js';
 import { THEME_CSS } from './theme.js';
 import { GENERATOR } from './version.js';
-import { BLOCK, HEAD_MOVED, RENAMES, VOID, hasBlockChild, isDroppedAttr, isEmptyInline } from './tree.js';
+import { BLOCK, HEAD_MOVED, HEAD_ONLY, RENAMES, VOCAB, VOID, hasBlockChild, isDroppedAttr, isEmptyInline } from './tree.js';
 import { escapeText, escapeAttr } from './entities.js';
 
 const INDENT = '  ';
@@ -184,9 +184,14 @@ export function normalizeDocument(root, warnings = [], opts = {}) {
     found ?? { type: 'element', name: 'html', attrs: { lang: 'en' }, children: [] },
     warnings,
   );
-  const oldHead = html.children.find((c) => c.name === 'head') ?? looseHead;
+  const heads = html.children.filter((c) => c.name === 'head');
+  const oldHead = heads[0] ?? looseHead;
   const oldBody = html.children.find((c) => c.name === 'body') ?? looseBody;
   const stray = html.children.filter((c) => c.name !== 'head' && c.name !== 'body');
+  // A second `<head>` (or a loose one) is malformed, but its children are content: they
+  // join the canonical head, where the placement rules below apply. Dropping the element
+  // used to lose a `<meta name="author">` written in one, silently.
+  const spareHeads = [...heads.slice(1), ...(looseHead && oldHead !== looseHead ? [looseHead] : [])];
   // A `<title>` written outside `<head>` belongs in the head, not in the body where
   // it would silently become body text (and leave the document with no title).
   const outside = [...stray, ...rest];
@@ -194,14 +199,26 @@ export function normalizeDocument(root, warnings = [], opts = {}) {
   const displaced = bodyContent.filter(isHeadOnly);
   const remainder = bodyContent.filter((c) => !isHeadOnly(c));
   for (const c of displaced) warnings.push(`moved <${c.name}> into <head>`);
+  // The children of a spare `<head>` are head children: they belong in the canonical
+  // head (where `normalizeHead` sorts them), not in the body where a `<meta>` would be
+  // reported as misplaced and the editor would refuse the document.
+  const headKids = [...(oldHead ? oldHead.children : []), ...displaced, ...spareHeads.flatMap((h) => h.children || [])];
+  // A vocabulary element in the head that the head does not allow (`<p>junk</p>` written
+  // there) is content: a browser moves it into the body, and leaving it in the head
+  // renders it above the document, because no stylesheet hides the head itself.
+  const isContent = (c) => c.type === 'element'
+    && VOCAB.has(RENAMES[c.name] || String(c.name).toLowerCase())
+    && !HEAD_ONLY.has(RENAMES[c.name] || String(c.name).toLowerCase());
+  const headContent = headKids.filter(isContent);
+  for (const c of headContent) warnings.push(`moved <${RENAMES[c.name] || c.name}> out of <head>`);
   const head = normalizeHead(
-    normalizeChildren([...(oldHead ? oldHead.children : []), ...displaced], 'head', warnings), warnings, opts,
+    normalizeChildren(headKids.filter((c) => !headContent.includes(c)), 'head', warnings), warnings, opts,
   );
   const body = {
     type: 'element',
     name: 'body',
     attrs: oldBody ? oldBody.attrs : {},
-    children: normalizeChildren(remainder, 'body', warnings),
+    children: normalizeChildren([...remainder, ...headContent], 'body', warnings),
   };
   if (html.attrs['data-neodoc'] !== '1') { html.attrs['data-neodoc'] = '1'; warnings.push('set data-neodoc="1"'); }
   if (!html.attrs.lang) { html.attrs.lang = 'en'; warnings.push('added lang="en"'); }
@@ -226,8 +243,9 @@ function normalizeHead(children, warnings, opts) {
     } else if (child.name === 'meta') {
       const { name, charset } = child.attrs;
       if (name === 'generator' || charset) continue; // canonical forms, re-emitted below
+      // A `<meta>` with neither keeps its place in the file: useless, but content.
       if (name) metas.push(child);
-      else warnings.push('dropped <meta> without a name or charset');
+      else { warnings.push('kept <meta> without a name or charset'); extra.push(child); }
     } else if (child.name === 'style') {
       if (opts.style !== 'none' && String(child.children?.[0]?.text ?? '').trim() !== THEME_CSS.trim()) {
         warnings.push('replaced the <style> block with the canonical stylesheet');

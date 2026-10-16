@@ -57,7 +57,9 @@ export function lint(text) {
     if (name === 'body') body = node;
     if (name === 'head') head = node;
     if (name === '#root' || !VOCAB.has(name)) {
-      if (name !== '#root') add(line, 'vocab', `<${name}> is not part of the Neodoc vocabulary`, true);
+      // `fmt` keeps an unknown element (invariant 5): a real finding, but not one that
+      // `--fix` can do anything about.
+      if (name !== '#root') add(line, 'vocab', `<${name}> is not part of the Neodoc vocabulary`, false);
       continue;
     }
     for (const [key, value] of Object.entries(node.attrs)) {
@@ -92,6 +94,18 @@ export function lint(text) {
   // `title`/`meta`/`style`/`link`/`base` outside <head> are reported, and `fmt`
   // moves them into the head rather than leaving them as body text (SPEC §3).
   const inHead = new Set(head ? [head, ...descendants(head)] : []);
+  // A vocabulary element the head does not allow is content: `fmt` moves it into the
+  // body, so the finding is fixable; a `<meta>` with nothing to declare is a warning.
+  for (const node of head ? descendants(head) : []) {
+    if (node.type !== 'element') continue;
+    const name = RENAMES[node.name] || node.name;
+    if (name !== 'head' && VOCAB.has(name) && !HEAD_ONLY.has(name)) {
+      add(at(node.pos ?? 0), 'misplaced-body', `<${name}> belongs in <body>, not <head>`, true);
+    }
+    if (name === 'meta' && !node.attrs.name && !node.attrs.charset) {
+      add(at(node.pos ?? 0), 'meta-unused', '<meta> without a name or charset does nothing', false, 'warning');
+    }
+  }
   for (const [node, line] of headOnly) {
     if (inHead.has(node)) continue;
     // Only a `<title>` that is a *direct child of `<body>`* is relocated by `fmt`;

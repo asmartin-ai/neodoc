@@ -106,6 +106,11 @@ blocks. No block inside an inline context.
 
 ## 4. Canonical serialization (normative)
 
+Nesting is represented to a depth of 512 elements. A start tag deeper than that is
+dropped and reported by `parse` (a `lint` finding; `fmt` warns on stderr and writes the
+flattened tree), so a pathological file is reported rather than crashing the tools. The
+content of a dropped element stays in its parent.
+
 1. **Line discipline.** Every element starts on its own line. Children are
    indented **2 spaces** per depth level relative to `<html>`. No blank lines.
    No line is hard-wrapped.
