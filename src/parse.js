@@ -19,37 +19,56 @@ const IMPLIED_END = {
   option: new Set(['option']),
 };
 
-const NAME_CH = /[a-zA-Z0-9:_.-]/;
+// Sticky (`y`) scanners: one regex exec per token instead of a per-character
+// predicate test plus string concatenation. `lastIndex` is set before each use.
+const TAGNAME_RE = /[a-zA-Z0-9:_.-]+/y;
+const SPACE_RE = /\s+/y;
+const ATTRNAME_RE = /[^\s=>/]+/y;
+const UNQUOTED_RE = /[^\s>]*/y;
+const ENDTAG_RE = /<\/([a-zA-Z][^\s>]*)\s*>/y;
+const DOCTYPE_RE = /<!doctype/i;
+
+function scan(re, src, at) {
+  re.lastIndex = at;
+  const m = re.exec(src);
+  return m && m.index === at ? m : null;
+}
 
 function readTag(src, i) {
   let j = i + 1;
-  let name = '';
-  while (j < src.length && NAME_CH.test(src[j])) name += src[j++];
-  name = name.toLowerCase();
+  TAGNAME_RE.lastIndex = j;
+  const nameMatch = TAGNAME_RE.exec(src);
+  const name = nameMatch ? nameMatch[0].toLowerCase() : '';
+  j += nameMatch ? nameMatch[0].length : 0;
   const attrs = {};
   let selfClosing = false;
-  while (j < src.length) {
-    while (j < src.length && /\s/.test(src[j])) j++;
+  const n = src.length;
+  while (j < n) {
+    const ws = scan(SPACE_RE, src, j);
+    if (ws) j += ws[0].length;
+    if (j >= n) break;
     if (src[j] === '>') { j++; break; }
-    if (src[j] === '/' && src[j + 1] === '>') { selfClosing = true; j += 2; break; }
-    if (j >= src.length) break;
-    let an = '';
-    while (j < src.length && !/[\s=>/]/.test(src[j])) an += src[j++];
-    if (!an) { j++; continue; }
+    if (src.startsWith('/>', j)) { selfClosing = true; j += 2; break; }
+    const anMatch = scan(ATTRNAME_RE, src, j);
+    if (!anMatch) { j++; continue; }
+    const an = anMatch[0];
+    j += an.length;
+    const ws2 = scan(SPACE_RE, src, j);
+    if (ws2) j += ws2[0].length;
     let av = '';
-    while (j < src.length && /\s/.test(src[j])) j++;
     if (src[j] === '=') {
       j++;
-      while (j < src.length && /\s/.test(src[j])) j++;
+      const ws3 = scan(SPACE_RE, src, j);
+      if (ws3) j += ws3[0].length;
       const q = src[j];
       if (q === '"' || q === "'") {
         const endQ = src.indexOf(q, j + 1);
-        av = src.slice(j + 1, endQ === -1 ? src.length : endQ);
-        j = endQ === -1 ? src.length : endQ + 1;
+        av = src.slice(j + 1, endQ === -1 ? n : endQ);
+        j = endQ === -1 ? n : endQ + 1;
       } else {
-        const s = j;
-        while (j < src.length && !/[\s>]/.test(src[j])) j++;
-        av = src.slice(s, j);
+        const unquoted = scan(UNQUOTED_RE, src, j);
+        av = unquoted ? unquoted[0] : '';
+        j += av.length;
       }
     }
     attrs[an.toLowerCase()] = decodeEntities(av);
@@ -74,7 +93,8 @@ export function parse(src) {
   const root = { type: 'element', name: '#root', attrs: {}, children: [], pos: 0 };
   const stack = [root];
   const n = src.length;
-  const lower = src.toLowerCase();
+  let lower = '';
+  const lowerOf = () => (lower ||= src.toLowerCase());
   let i = 0;
 
   const parent = () => stack[stack.length - 1];
@@ -113,7 +133,7 @@ export function parse(src) {
       i = end + 3;
       continue;
     }
-    if (/^<!doctype/i.test(src.slice(i, i + 10))) {
+    if (DOCTYPE_RE.test(src.slice(i, i + 12))) {
       const end = src.indexOf('>', i);
       parent().children.push({ type: 'doctype', text: 'doctype html', pos: i });
       i = end === -1 ? n : end + 1;
@@ -126,7 +146,7 @@ export function parse(src) {
       continue;
     }
     if (src[i + 1] === '/') {
-      const m = /^<\/([a-zA-Z][^\s>]*)\s*>/.exec(src.slice(i, i + 300));
+      const m = scan(ENDTAG_RE, src, i);
       if (!m) { err('malformed end tag', i); pushText('<', i); i++; continue; }
       const name = m[1].toLowerCase();
       let k = stack.length - 1;
@@ -145,7 +165,7 @@ export function parse(src) {
     i = t.end;
 
     if (RAW_TEXT.has(t.name) && !t.selfClosing) {
-      const close = findCloseTag(src, lower, t.name, i);
+      const close = findCloseTag(src, lowerOf(), t.name, i);
       const stop = close === -1 ? n : close;
       addText(node, src.slice(i, stop), i, MODE[t.name]);
       if (close === -1) { err(`unterminated <${t.name}>`, node.pos); i = n; }
