@@ -110,7 +110,8 @@ export function lint(text) {
     const n = Math.max(a.length, b.length);
     let i = 0;
     while (i < n && a[i] === b[i]) i++;
-    const count = Math.abs(a.length - b.length) + 1;
+    let count = 0;
+    for (let j = 0; j < n; j++) if (a[j] !== b[j]) count++;
     add(i + 1, 'format', `not canonical (${count} line(s) differ, first here) — run: neodoc fmt -w`, true);
   }
   return findings;

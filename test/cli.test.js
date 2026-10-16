@@ -82,3 +82,12 @@ test('`note rm` removes a thread it does find', () => {
   assert.equal(cli(['note', 'rm', file, id]).status, 0, 'a real id still removes the thread');
   assert.doesNotMatch(readFileSync(file, 'utf8'), /data-thread/);
 });
+
+test('the not-canonical message counts the lines that actually differ', () => {
+  const scrambled = DOC
+    .replace('data-neodoc="1" lang="en"', 'lang="en" data-neodoc="1"')
+    .replace('content="neodoc 1.0.0" name="generator"', 'name="generator" content="neodoc 1.0.0"');
+  const res = cli(['lint', tmpFile('doc.nd.html', scrambled)]);
+  assert.equal(res.status, 1);
+  assert.match(res.stdout, /not canonical \(2 line\(s\) differ/);
+});
