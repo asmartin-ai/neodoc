@@ -509,12 +509,14 @@ async function save() {
   const { text: src, warnings } = canonicalText();
   const bytes = new Blob([src]).size;
   let how;
+  let wrote = false;
   try {
     if (state.handle && state.handle.createWritable) {
       const w = await state.handle.createWritable();
       await w.write(src);
       await w.close();
       how = `wrote ${state.name}`;
+      wrote = true;
     } else if (location.protocol === 'file:') {
       throw new Error('no server on a file:// page'); // straight to the download
     } else {
@@ -523,17 +525,19 @@ async function save() {
       const headers = { 'content-type': 'text/html;charset=utf-8' };
       if (state.mtime) headers['x-neodoc-mtime'] = String(state.mtime);
       const res = await fetch(`/save?path=${encodeURIComponent(state.name)}`, { method: 'POST', body: src, headers });
-      if (!res.ok) {
-        const why = res.headers.get('content-type')?.includes('json') ? (await res.json()).error : null;
-        throw new Error(why || `POST /save -> ${res.status}`);
-      }
+      const body = res.headers.get('content-type')?.includes('json') ? await res.json() : null;
+      if (!res.ok) throw new Error((body && body.error) || `POST /save -> ${res.status}`);
+      // The server just wrote this file: it is the revision to compare against next time.
+      if (body && body.mtime) state.mtime = body.mtime;
       how = `posted ${state.name}`;
+      wrote = true;
     }
   } catch (err) {
     download(src);
-    how = `downloaded ${state.name} (${err.message})`;
+    how = `downloaded ${state.name} (the file was not written: ${err.message})`;
   }
-  state.dirty = false;
+  // A download is not a save: the document is still unsaved where it came from.
+  state.dirty = !wrote;
   state.savedText = src;
   status(`${how} — ${bytes} bytes, ${warnings.length} warning(s)`);
   if (warnings.length) console.info('neodoc: save warnings', warnings);

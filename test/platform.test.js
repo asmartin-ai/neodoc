@@ -78,7 +78,10 @@ test('no source relies on iterator helpers (Node 22+ only)', () => {
   const files = [
     ...readdirSync(join(ROOT, 'src')).map((f) => `src/${f}`),
     ...readdirSync(join(ROOT, 'editor')).filter((f) => f.endsWith('.js')).map((f) => `editor/${f}`),
-    'tools/bundle.js',
+    ...readdirSync(join(ROOT, 'test')).filter((f) => f.endsWith('.js')).map((f) => `test/${f}`),
+    ...readdirSync(join(ROOT, 'e2e')).filter((f) => f.endsWith('.js')).map((f) => `e2e/${f}`),
+    ...readdirSync(join(ROOT, 'bin')).filter((f) => f.endsWith('.js')).map((f) => `bin/${f}`),
+    ...readdirSync(join(ROOT, 'tools')).filter((f) => f.endsWith('.js')).map((f) => `tools/${f}`),
   ];
   for (const file of files) {
     const source = codeOnly(readFileSync(join(ROOT, file), 'utf8'));

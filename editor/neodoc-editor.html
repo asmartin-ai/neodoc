@@ -2899,7 +2899,7 @@ await (async function () {
 const {parse} = __mods["src/parse"];
 const {THEME_CSS} = __mods["src/theme"];
 const {GENERATOR} = __mods["src/version"];
-const {BLOCK, HEAD_MOVED, HEAD_ONLY, RENAMES, VOCAB, VOID, hasBlockChild, isDroppedAttr, isEmptyInline} = __mods["src/tree"];
+const {BLOCK, descendants, HEAD_MOVED, HEAD_ONLY, RENAMES, VOCAB, VOID, hasBlockChild, isDroppedAttr, isEmptyInline} = __mods["src/tree"];
 const {escapeText, escapeAttr} = __mods["src/entities"];
 const INDENT = '  ';
 
@@ -3091,7 +3091,29 @@ function normalizeDocument(root, warnings = [], opts = {}) {
   // The children of a spare `<head>` are head children: they belong in the canonical
   // head (where `normalizeHead` sorts them), not in the body where a `<meta>` would be
   // reported as misplaced and the editor would refuse the document.
-  const headKids = [...(oldHead ? oldHead.children : []), ...displaced, ...spareHeads.flatMap((h) => h.children || [])];
+  // A `<title>` inside a head that is itself inside the head is still the document's
+  // name — a browser uses it — so it is hoisted ahead of everything else, even though
+  // the nested head around it is junk that stays where it is.
+  const nameOf = (n) => RENAMES[n.name] || String(n.name).toLowerCase();
+  const nestedTitles = [];
+  const liftTitles = (node) => {
+    node.children = (node.children || []).filter((c) => {
+      if (c.type === 'element' && nameOf(c) === 'title') { nestedTitles.push(c); return false; }
+      if (c.type === 'element') liftTitles(c);
+      return true;
+    });
+  };
+  for (const h of (oldHead ? oldHead.children : [])) {
+    // The nested head itself stays (junk, reported by lint); only its title moves.
+    if (h.type === 'element' && nameOf(h) === 'head') liftTitles(h);
+  }
+  for (const t of nestedTitles) warnings.push('moved <title> out of a nested <head>');
+  const headKids = [
+    ...nestedTitles,
+    ...(oldHead ? oldHead.children : []),
+    ...displaced,
+    ...spareHeads.flatMap((h) => h.children || []),
+  ];
   // Head text is content: a browser's parser moves it into the body, so `fmt` does too.
   const headText = headKids.filter((c) => c.type === 'text' && c.text.trim());
   for (const c of headText) warnings.push('moved text out of <head>');
@@ -5305,12 +5327,14 @@ async function save() {
   const { text: src, warnings } = canonicalText();
   const bytes = new Blob([src]).size;
   let how;
+  let wrote = false;
   try {
     if (state.handle && state.handle.createWritable) {
       const w = await state.handle.createWritable();
       await w.write(src);
       await w.close();
       how = `wrote ${state.name}`;
+      wrote = true;
     } else if (location.protocol === 'file:') {
       throw new Error('no server on a file:// page'); // straight to the download
     } else {
@@ -5319,17 +5343,19 @@ async function save() {
       const headers = { 'content-type': 'text/html;charset=utf-8' };
       if (state.mtime) headers['x-neodoc-mtime'] = String(state.mtime);
       const res = await fetch(`/save?path=${encodeURIComponent(state.name)}`, { method: 'POST', body: src, headers });
-      if (!res.ok) {
-        const why = res.headers.get('content-type')?.includes('json') ? (await res.json()).error : null;
-        throw new Error(why || `POST /save -> ${res.status}`);
-      }
+      const body = res.headers.get('content-type')?.includes('json') ? await res.json() : null;
+      if (!res.ok) throw new Error((body && body.error) || `POST /save -> ${res.status}`);
+      // The server just wrote this file: it is the revision to compare against next time.
+      if (body && body.mtime) state.mtime = body.mtime;
       how = `posted ${state.name}`;
+      wrote = true;
     }
   } catch (err) {
     download(src);
-    how = `downloaded ${state.name} (${err.message})`;
+    how = `downloaded ${state.name} (the file was not written: ${err.message})`;
   }
-  state.dirty = false;
+  // A download is not a save: the document is still unsaved where it came from.
+  state.dirty = !wrote;
   state.savedText = src;
   status(`${how} — ${bytes} bytes, ${warnings.length} warning(s)`);
   if (warnings.length) console.info('neodoc: save warnings', warnings);

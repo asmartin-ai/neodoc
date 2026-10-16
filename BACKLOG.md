@@ -5,6 +5,21 @@ either fixed in `git log` (CLI/lint contract, markdown round trips, the editor's
 policy and undo stack, docx fidelity, head placement, the nesting cap, the URL policy,
 path addressing, save safety, typing cost) or is listed below as a deliberate choice.
 
+The last round found three more, all fixed in the commits that follow it:
+
+- **The mtime handshake refused the second save of every served session.** `POST /save`
+  gave the writer no revision back, so save #2 compared the file against the mtime from
+  *load* time, was refused 409, and turned into a download without touching the file —
+  worse than the concurrent-write problem it was added for. A save now reports the
+  revision it wrote, the page adopts it, and a download no longer marks the document
+  saved. `e2e/served.spec.js` saves twice.
+- **A `<title>` inside a `<head>` nested in the head never named the document**, so a
+  browser showed an empty name. It is lifted out of the nested head now (the nested head
+  itself stays, with a `structure` finding).
+- **The iterator-helper guard scanned fewer directories than its comment claimed**, so a
+  Node-22-only helper in `test/`, `e2e/`, `bin/` or `tools/` would have been invisible.
+  It scans them now (verified by planting one).
+
 ## Accepted / by design
 
 - **A `<template><script>` is refused, not ignored.** A template is inert only while its
@@ -33,6 +48,13 @@ path addressing, save safety, typing cost) or is listed below as a deliberate ch
   the caret in the chrome is left to the browser, which is the right undo for a text box.
 - **The editor's `#open-input` refuses a document that is not UTF-8** rather than opening
   it with replacement characters; the CLI and `serve` do the same, with the same wording.
+- **A save is refused (409) when the file changed under the page** — including when
+  another tool rewrote it to identical bytes. That is the protection working: the reason is
+  shown, the edits are kept as a download, and the document stays marked unsaved. On a
+  filesystem with coarse timestamps a write inside the same tick can still be missed.
+- **The comment sidebar refreshes on open and on commands, not on every keystroke** (SPEC
+  §9). A structural edit made by typing can therefore leave a thread's *path* in the
+  status bar stale; its Resolve/Reply actions use the thread id and keep working.
 
 ## Refuted
 

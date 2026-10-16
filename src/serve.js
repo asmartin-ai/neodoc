@@ -175,7 +175,10 @@ async function save(req, res, ctx) {
     await rm(tmp, { force: true });
     throw e;
   }
-  send(res, 200, JSON.stringify({ ok: true, bytes: Buffer.byteLength(text) }), { 'content-type': TYPES['.json'] });
+  // Tell the writer which revision it created: comparing it against the one it loaded
+  // would refuse its own second save.
+  const mtime = await stat(ctx.target).then((s) => s.mtimeMs).catch(() => null);
+  send(res, 200, JSON.stringify({ ok: true, bytes: Buffer.byteLength(text), mtime }), { 'content-type': TYPES['.json'] });
 }
 
 /** Resolve `rel` inside `base`, following symlinks, refusing anything outside it:

@@ -104,4 +104,16 @@ test('a save that would revert a change made outside the editor is refused', asy
     method: 'POST', body: '<!doctype html>\n', headers: { origin: base },
   });
   assert.equal(fresh.status, 200, 'a save with no revision (an older page) still works');
+
+  // The writer owns the revision it created: its *second* save must not be refused as
+  // stale (it was comparing against the mtime from when the page loaded).
+  const first = await fetch(`${base}/save`, {
+    method: 'POST', body: '<!doctype html>\n', headers: { origin: base },
+  });
+  const rev = (await first.json()).mtime;
+  assert.ok(rev > 0, 'a save reports the revision it wrote');
+  const second = await fetch(`${base}/save`, {
+    method: 'POST', body: '<!doctype html>\n', headers: { origin: base, 'x-neodoc-mtime': String(rev) },
+  });
+  assert.equal(second.status, 200, 'saving twice in a row works');
 });

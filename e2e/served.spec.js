@@ -56,8 +56,21 @@ test('serves a document, edits it, and saves it in place', async ({ page }) => {
     await expect(page.locator('#st-state')).toContainText(FIXTURE_NAME);
     await expect(page.locator('#st-dirty')).toHaveText('saved');
 
+    // A second save must reach the file too: the page compares the revision the server
+    // gave it, and used to send back the one from *load* time, so every save after the
+    // first was refused as stale and silently became a download. (Before the checks
+    // below, because they rewrite the file to test canonicality, which legitimately
+    // makes the page's revision stale.)
+    await page.locator('body > h1').first().click();
+    await page.keyboard.press('End');
+    await page.keyboard.type('AGAIN');
+    await page.locator('button[data-cmd="save"]').click();
+    await expect(page.locator('#st-state')).toContainText('posted');
+    await expect(page.locator('#st-dirty')).toHaveText('saved');
+
     const onDisk = await readFile(file, 'utf8');
     expect(onDisk).toContain('Servededit');
+    expect(onDisk).toContain('AGAIN');
     await expectCanonical(onDisk, file);
 
     expectClean(noise);

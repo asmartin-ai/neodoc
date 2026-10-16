@@ -329,3 +329,12 @@ test('the nesting cap is reported once, not once per tag', () => {
   const deep = `<!doctype html><html><body>${'<section>'.repeat(5000)}<p>x</p>${'</section>'.repeat(5000)}</body></html>`;
   assert.equal(parse(deep).errors.filter((e) => /nesting deeper/.test(e.message)).length, 1);
 });
+
+test('a title inside a nested head still names the document', () => {
+  const doc = '<!doctype html><html data-neodoc="1" lang="en"><head><meta charset="utf-8">'
+    + '<head><title>ONLY</title></head><meta content="neodoc 1.0.0" name="generator"></head><body><p>x</p></body></html>';
+  const out = fmt(doc);
+  assert.equal((out.match(/<title>[^<]*<\/title>/g) || []).length, 1, `exactly one title, got ${out.match(/<title>[^<]*<\/title>/g)}`);
+  assert.match(out, /<title>ONLY<\/title>/, 'a browser parsing the original uses that name');
+  assert.equal(fmt(out), out);
+});

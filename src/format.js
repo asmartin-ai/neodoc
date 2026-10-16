@@ -9,7 +9,7 @@
 import { parse } from './parse.js';
 import { THEME_CSS } from './theme.js';
 import { GENERATOR } from './version.js';
-import { BLOCK, HEAD_MOVED, HEAD_ONLY, RENAMES, VOCAB, VOID, hasBlockChild, isDroppedAttr, isEmptyInline } from './tree.js';
+import { BLOCK, descendants, HEAD_MOVED, HEAD_ONLY, RENAMES, VOCAB, VOID, hasBlockChild, isDroppedAttr, isEmptyInline } from './tree.js';
 import { escapeText, escapeAttr } from './entities.js';
 
 const INDENT = '  ';
@@ -202,7 +202,29 @@ export function normalizeDocument(root, warnings = [], opts = {}) {
   // The children of a spare `<head>` are head children: they belong in the canonical
   // head (where `normalizeHead` sorts them), not in the body where a `<meta>` would be
   // reported as misplaced and the editor would refuse the document.
-  const headKids = [...(oldHead ? oldHead.children : []), ...displaced, ...spareHeads.flatMap((h) => h.children || [])];
+  // A `<title>` inside a head that is itself inside the head is still the document's
+  // name — a browser uses it — so it is hoisted ahead of everything else, even though
+  // the nested head around it is junk that stays where it is.
+  const nameOf = (n) => RENAMES[n.name] || String(n.name).toLowerCase();
+  const nestedTitles = [];
+  const liftTitles = (node) => {
+    node.children = (node.children || []).filter((c) => {
+      if (c.type === 'element' && nameOf(c) === 'title') { nestedTitles.push(c); return false; }
+      if (c.type === 'element') liftTitles(c);
+      return true;
+    });
+  };
+  for (const h of (oldHead ? oldHead.children : [])) {
+    // The nested head itself stays (junk, reported by lint); only its title moves.
+    if (h.type === 'element' && nameOf(h) === 'head') liftTitles(h);
+  }
+  for (const t of nestedTitles) warnings.push('moved <title> out of a nested <head>');
+  const headKids = [
+    ...nestedTitles,
+    ...(oldHead ? oldHead.children : []),
+    ...displaced,
+    ...spareHeads.flatMap((h) => h.children || []),
+  ];
   // Head text is content: a browser's parser moves it into the body, so `fmt` does too.
   const headText = headKids.filter((c) => c.type === 'text' && c.text.trim());
   for (const c of headText) warnings.push('moved text out of <head>');
