@@ -75,7 +75,7 @@ test('Ctrl+Z undoes a structural edit instead of deleting text from another bloc
 
   await page.keyboard.press('Control+z');
   await expect(page.locator('body > h1')).toHaveText('Changes');
-  await expect(page.locator('#st-status')).toContainText('nothing to undo');
+  await expect(page.locator('#st-state')).toContainText('nothing to undo');
 
   expectClean(noise);
 });

@@ -266,13 +266,18 @@ function sweepEditorNodes() {
  * different block instead of undoing the Enter.
  */
 function snapshot(text) {
-  const now = Date.now();
-  if (now - lastSnapshotAt < TYPING_PAUSE && text === undefined) return;
   const current = text === undefined ? canonicalText().text : text;
-  lastSnapshotAt = now;
+  lastSnapshotAt = Date.now();
   if (state.undo[state.undo.length - 1] === current) return;
   state.undo.push(current);
   if (state.undo.length > UNDO_LIMIT) state.undo.shift();
+}
+
+/** A typing snapshot, coalesced: serializing the document per keystroke is too much
+ *  for a large one, so a pause is what lands in the history (see TYPING_PAUSE). */
+function snapshotTyping() {
+  if (Date.now() - lastSnapshotAt < TYPING_PAUSE) return;
+  snapshot();
 }
 
 /** Step the document back one snapshot, keeping the caret in its block. */
@@ -557,7 +562,6 @@ function runInlineRule() {
 function onInput(e) {
   if (e && e.inputType && !/^insert(Text|CompositionText|FromComposition)$/.test(e.inputType)) return;
   if (state.suggest) return; // suggest mode inserts its own nodes
-  snapshot();
   runBlockRule();
   runInlineRule();
   edited();
@@ -626,6 +630,7 @@ function toPre(block) {
   return pre;
 }
 function insertHrHere() {
+  snapshot();
   const r = caretRange();
   const block = r && blockOf(r.startContainer);
   const hr = h('hr');
@@ -639,6 +644,7 @@ function insertHrHere() {
 function toggleInline(name, attrs = {}) {
   const r = caretRange();
   if (!r) return;
+  snapshot();
   const holder = r.collapsed ? null : ancestorNamed(r.commonAncestorContainer, name);
   if (holder && !r.collapsed) {
     const kids = [...holder.childNodes];
@@ -963,8 +969,12 @@ function currentIns(node) {
 }
 
 function onBeforeInput(e) {
-  if (!state.suggest) return;
   const t = e.inputType || '';
+  // A text insertion has not happened yet, which is exactly the state Ctrl+Z has to
+  // come back to. Coalesced into one entry per typing pause (see TYPING_PAUSE);
+  // suggest mode edits the tree on every one of these events.
+  if (state.suggest || /^insert(Text|CompositionText|FromComposition)$/.test(t)) snapshotTyping();
+  if (!state.suggest) return;
   if (t === 'insertText' && e.data) {
     e.preventDefault();
     suggestInsert(e.data);
@@ -1097,6 +1107,7 @@ const readAsDataURL = (file) => new Promise((resolve, reject) => {
   fr.readAsDataURL(file);
 });
 async function insertImage(file) {
+  snapshot();
   const src = state.embed ? await readAsDataURL(file) : `assets/${file.name}`;
   const img = h('img', { alt: file.name.replace(/\.[^.]+$/, ''), src });
   insertInline([img]);
@@ -1216,6 +1227,7 @@ function blockCommand(fn) {
   const r = caretRange();
   const block = r && blockOf(r.startContainer);
   if (!block) { status('put the caret in a block first'); return; }
+  snapshot();
   fn(block);
   edited();
 }
