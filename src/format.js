@@ -12,7 +12,7 @@ import { GENERATOR } from './version.js';
 import { HEAD_MOVED, RENAMES, VOID, hasBlockChild, isDroppedAttr, isEmptyInline } from './tree.js';
 import { escapeText, escapeAttr } from './entities.js';
 
-export const INDENT = '  ';
+const INDENT = '  ';
 
 // The whitespace model of docs/SPEC.md §4.4 is exactly space, tab, LF, CR and FF.
 // `\s` would also match U+00A0, U+2000-U+200A, U+3000 and U+FEFF, so a decoded
@@ -351,8 +351,3 @@ export function formatFragment(html) {
   return { lines, warnings };
 }
 
-/** Prefix canonical lines so they can be spliced at `depth`. */
-export function reindent(lines, depth) {
-  const pad = INDENT.repeat(depth);
-  return lines.map((l) => (l === '' ? l : pad + l));
-}

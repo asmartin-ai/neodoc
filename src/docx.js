@@ -326,7 +326,7 @@ function para(o, runs) {
     o.style ? `<w:pStyle w:val="${o.style}"/>` : '',
     o.num ? `<w:numPr><w:ilvl w:val="${o.num.ilvl}"/><w:numId w:val="${o.num.numId}"/></w:numPr>` : '',
     o.hr ? '<w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="auto"/></w:pBdr>' : '',
-    o.spacing ? `<w:spacing ${o.spacing}/>` : '',
+    '',
     o.jc ? `<w:jc w:val="${o.jc}"/>` : '',
   ].join('');
 

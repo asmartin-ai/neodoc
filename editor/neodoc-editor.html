@@ -140,7 +140,6 @@ await (async function () {
 // Neodoc tree model — the in-memory document. Shared by CLI and browser.
 
 const VOID = new Set(['br', 'hr', 'img', 'meta']);
-const RAW = new Set(['style', 'script', 'pre', 'textarea', 'title']);
 
 const INLINE = new Set([
   'strong', 'em', 'code', 's', 'u', 'mark', 'sub', 'sup', 'ins', 'del', 'a', 'img', 'br',
@@ -244,9 +243,8 @@ function cmt(text) {
   return { type: 'comment', text };
 }
 
+
 const isEl = (n, name) => n.type === 'element' && (name === undefined || n.name === name);
-const isText = (n) => n.type === 'text';
-const isComment = (n) => n.type === 'comment';
 
 function textOf(node) {
   let out = '';
@@ -276,22 +274,6 @@ function* descendants(node) {
   }
 }
 
-function childrenOf(node, name) {
-  return (node.children || []).filter((c) => isEl(c, name));
-}
-
-function findById(node, id) {
-  for (const d of descendants(node)) if (isEl(d) && d.attrs.id === id) return d;
-  return null;
-}
-
-function clone(node) {
-  const copy = { ...node };
-  if (node.attrs) copy.attrs = { ...node.attrs };
-  if (node.children) copy.children = node.children.map(clone);
-  return copy;
-}
-
 /** Round-trippable selector for `node` under `root`, e.g. `body > p:nth-of-type(1)`. */
 function pathOf(root, target) {
   const parts = [];
@@ -316,7 +298,7 @@ function parentOf(root, target) {
   return null;
 }
 
-__mods["src/tree"] = {VOID, RAW, INLINE, HEADINGS, BLOCK, VOCAB, GLOBAL_ATTRS, HEAD_ONLY, HEAD_MOVED, ATTRS, isAttrAllowed, DROP_ATTRS, isDroppedAttr, RENAMES, hasBlockChild, isEmptyInline, el, txt, cmt, isEl, isText, isComment, textOf, walk, descendants, childrenOf, findById, clone, pathOf, parentOf};
+__mods["src/tree"] = {VOID, INLINE, HEADINGS, BLOCK, VOCAB, GLOBAL_ATTRS, HEAD_ONLY, HEAD_MOVED, ATTRS, isAttrAllowed, DROP_ATTRS, isDroppedAttr, RENAMES, hasBlockChild, isEmptyInline, el, txt, cmt, isEl, textOf, walk, descendants, pathOf, parentOf};
 })();
 
 await (async function () {
@@ -3172,13 +3154,8 @@ function formatFragment(html) {
   return { lines, warnings };
 }
 
-/** Prefix canonical lines so they can be spliced at `depth`. */
-function reindent(lines, depth) {
-  const pad = INDENT.repeat(depth);
-  return lines.map((l) => (l === '' ? l : pad + l));
-}
 
-__mods["src/format"] = {INDENT, normalizePre, normalizeDocument, emitInline, emitBlock, serialize, formatTree, format, normalizeFragment, formatFragment, reindent};
+__mods["src/format"] = {normalizePre, normalizeDocument, emitInline, emitBlock, serialize, formatTree, format, normalizeFragment, formatFragment};
 })();
 
 await (async function () {
@@ -4709,7 +4686,7 @@ const UNSAFE_IN_BODY = new Set(['script', 'style', 'link', 'base', 'meta', 'ifra
 // reported and left out, so a head <script> never reaches this page.
 const SAFE_FROM_HEAD = new Set(['meta', 'title', 'style']);
 
-const state = { name: 'untitled.nd.html', mode: 'inline', dirty: false, served: false, handle: null, suggest: false, embed: true };
+const state = { name: 'untitled.nd.html', mode: 'inline', dirty: false, handle: null, suggest: false, embed: true };
 
 // Caret anchors. A browser resolves a block-final range to the end of the last
 // *text* position, so once an input rule creates `<strong>x</strong>` at the end of
@@ -4928,7 +4905,6 @@ async function loadServed() {
     const res = await fetch('/doc');
     if (!res.ok) return false;
     const doc = await res.json();
-    state.served = true;
     state.mode = doc.mode === 'none' ? 'none' : 'inline';
     await openText(doc.name, doc.text);
     return true;

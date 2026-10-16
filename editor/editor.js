@@ -56,7 +56,7 @@ const UNSAFE_IN_BODY = new Set(['script', 'style', 'link', 'base', 'meta', 'ifra
 // reported and left out, so a head <script> never reaches this page.
 const SAFE_FROM_HEAD = new Set(['meta', 'title', 'style']);
 
-const state = { name: 'untitled.nd.html', mode: 'inline', dirty: false, served: false, handle: null, suggest: false, embed: true };
+const state = { name: 'untitled.nd.html', mode: 'inline', dirty: false, handle: null, suggest: false, embed: true };
 
 // Caret anchors. A browser resolves a block-final range to the end of the last
 // *text* position, so once an input rule creates `<strong>x</strong>` at the end of
@@ -275,7 +275,6 @@ async function loadServed() {
     const res = await fetch('/doc');
     if (!res.ok) return false;
     const doc = await res.json();
-    state.served = true;
     state.mode = doc.mode === 'none' ? 'none' : 'inline';
     await openText(doc.name, doc.text);
     return true;

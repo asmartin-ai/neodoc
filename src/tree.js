@@ -1,7 +1,6 @@
 // Neodoc tree model — the in-memory document. Shared by CLI and browser.
 
 export const VOID = new Set(['br', 'hr', 'img', 'meta']);
-export const RAW = new Set(['style', 'script', 'pre', 'textarea', 'title']);
 
 export const INLINE = new Set([
   'strong', 'em', 'code', 's', 'u', 'mark', 'sub', 'sup', 'ins', 'del', 'a', 'img', 'br',
@@ -105,9 +104,8 @@ export function cmt(text) {
   return { type: 'comment', text };
 }
 
+
 export const isEl = (n, name) => n.type === 'element' && (name === undefined || n.name === name);
-export const isText = (n) => n.type === 'text';
-export const isComment = (n) => n.type === 'comment';
 
 export function textOf(node) {
   let out = '';
@@ -135,22 +133,6 @@ export function* descendants(node) {
     yield next;
     if (next.children) push(next.children);
   }
-}
-
-export function childrenOf(node, name) {
-  return (node.children || []).filter((c) => isEl(c, name));
-}
-
-export function findById(node, id) {
-  for (const d of descendants(node)) if (isEl(d) && d.attrs.id === id) return d;
-  return null;
-}
-
-export function clone(node) {
-  const copy = { ...node };
-  if (node.attrs) copy.attrs = { ...node.attrs };
-  if (node.children) copy.children = node.children.map(clone);
-  return copy;
 }
 
 /** Round-trippable selector for `node` under `root`, e.g. `body > p:nth-of-type(1)`. */
