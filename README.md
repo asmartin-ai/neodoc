@@ -76,17 +76,21 @@ contract is [docs/SPEC.md](docs/SPEC.md). The short version:
 - The document renders as-is: no renderer, no network, no JS.
 - Documents are treated as untrusted input. `fmt` keeps whatever the file holds —
   unknown elements, unknown attributes and `script` content are never deleted, they
-  are reported by `lint` — but the **editor refuses to load** a document whose body
-  contains `script`, `style`, `link`, `base`, `meta`, `iframe`, `object` or `embed`,
-  because those run, fetch or retarget the page that opened them. Edit such a file
-  as text, or remove the element, and it opens normally.
+  are reported by `lint` — but the **editor refuses to load** a document that would act
+  in its own page: a body `script`/`style`/`link`/`base`/`meta`/`iframe`/`object`/`embed`,
+  a head `script`/`link`/`base` or `meta[http-equiv]` (a refresh meta navigates the page
+  away), a head element that is not metadata (it would render above the document), and a
+  file that is not valid UTF-8 (saving it would replace the bytes it could not decode).
+  Refusing is deliberate: the editor writes what its live page holds, so a head child it
+  will not adopt is a head child the next save would delete. Edit such a file as text, or
+  remove the element, and it opens normally.
 
 ## The three surfaces
 
 | Surface | How |
 |---|---|
 | **Read** | Open the `.nd.html` file in any browser, or host it anywhere statically. Print it: the stylesheet has `@page`, `break-inside`, `orphans`/`widows` rules. |
-| **Edit (human)** | Open `editor/neodoc-editor.html` from anywhere — no server, no network, works offline from `file://`. Inline WYSIWYG editing (`# `, `**bold**`, `- item`, tables, paste and drops sanitized through the format), comment sidebar, suggest mode; `Cmd+S` writes canonical bytes through the browser's file handle, or downloads the file. Hosted or `neodoc serve FILE --open` (optional) adds in-place saving everywhere; that server answers only to loopback `Host` names, refuses writes that did not come from its own page, and ever edits the one file it was started with. |
+| **Edit (human)** | Open `editor/neodoc-editor.html` from anywhere — no server, no network, works offline from `file://`. Inline WYSIWYG editing (`# `, `**bold**`, `- item`, tables, paste and drops sanitized through the format), comment sidebar, suggest mode; `Cmd+S` writes canonical bytes through the browser's file handle, or downloads the file. Hosted or `neodoc serve FILE --open` (optional) adds in-place saving everywhere; that server answers only to loopback `Host` names, refuses writes that did not come from its own page or that would revert a change made outside the editor (`409`, and your edits come back as a download rather than being marked saved), and ever edits the one file it was started with. |
 | **Edit (agent/script)** | `neodoc get/set/insert/rm/comment/track` with CSS selectors and `--json`. Same selectors in every command; `get --json` hands back a round-trippable path. |
 
 ## Converting

@@ -104,6 +104,12 @@ lint error.
 `figure` contains exactly one `img` plus optional `figcaption`. `body` contains
 blocks. No block inside an inline context.
 
+`head` holds `meta`/`title`/`style`/`link`/`base`. A vocabulary element written in a
+`head` (`<p>junk</p>`) is content: `fmt` moves it to the front of `body`, where a
+browser's parser puts it, and `lint` reports `misplaced-body`. A second `<head>` or a
+`<body>` out of place is malformed; `fmt` keeps it, its children join the canonical head,
+and `lint` reports `structure`.
+
 ## 4. Canonical serialization (normative)
 
 Nesting is represented to a depth of 512 elements. A start tag deeper than that is
