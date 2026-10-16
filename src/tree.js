@@ -42,13 +42,21 @@ export const HEAD_ONLY = new Set(['title', 'meta', 'style', 'link', 'base']);
 export const HEAD_MOVED = new Set(['title']);
 
 /**
- * Does this URL use a scheme that runs or fetches in the page that shows the document?
- *
- * The HTML parser removes tab/LF/CR from a URL before resolving it, so `java\tscript:` is
- * `javascript:`. Relative URLs, `http(s)`, `mailto:` and the rest are fine; `data:` is
- * only ever legitimate for an image source, which the caller decides.
+ * The URL's scheme, after the stripping a URL parser does: tab/LF/CR anywhere, and leading
+ * C0 controls and spaces. Nothing else — a `\u00A0` before a scheme makes the whole thing a
+ * *relative* URL, which is why this is not `\s`.
  */
-export const isExecutableUrl = (href) => /^\s*(javascript|vbscript|data):/i.test(String(href).replace(/[\t\n\r]/g, ''));
+function schemeOf(href) {
+  const url = String(href).replace(/[\t\n\r]/g, '').replace(/^[\u0000-\u0020]+/, '');
+  const m = /^([a-z][a-z0-9+.-]*):/i.exec(url);
+  return m ? m[1].toLowerCase() : '';
+}
+
+/** A URL that may run or replace the page that shows the document. */
+export const isExecutableUrl = (href) => ['javascript', 'vbscript', 'data'].includes(schemeOf(href));
+
+/** The subset that executes in that page: a `data:` image is inert, `data:text/html` is not. */
+export const isScriptUrl = (href) => ['javascript', 'vbscript'].includes(schemeOf(href));
 
 /** Attribute values SPEC §3 fixes as an enumeration. */
 export const ATTR_VALUES = {

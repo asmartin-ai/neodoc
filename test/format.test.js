@@ -207,6 +207,12 @@ test('a link that runs in the page showing the document is reported', () => {
   assert.deepEqual(lint(fine).filter((f) => f.rule === 'url-scheme'), [], 'a data: image and ordinary links are fine');
   const dataLink = doc('<p><a href="data:text/html,&lt;script&gt;">x</a></p>');
   assert.equal(lint(dataLink).filter((f) => f.rule === 'url-scheme').length, 1, 'a data: *link* is not');
+  // A URL parser does not strip U+00A0, so this one is a relative URL, not javascript:.
+  const nbsp = doc('<p><a href="\u00A0javascript:alert(1)">x</a></p>');
+  assert.deepEqual(lint(nbsp).filter((f) => f.rule === 'url-scheme'), []);
+  // An image never executes a data: source.
+  const img = doc('<p><img alt="a" src="data:text/html,&lt;script&gt;"></p>');
+  assert.deepEqual(lint(img).filter((f) => f.rule === 'url-scheme'), []);
 });
 
 test('a finding fmt cannot repair is not advertised as fixable', () => {

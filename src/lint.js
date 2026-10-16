@@ -3,7 +3,7 @@
 
 import { formatTree } from './format.js';
 import { parse } from './parse.js';
-import { ATTR_VALUES, descendants, HEAD_MOVED, HEAD_ONLY, isAttrAllowed, isDroppedAttr, isEl, isExecutableUrl, RENAMES, VOCAB } from './tree.js';
+import { ATTR_VALUES, descendants, HEAD_MOVED, HEAD_ONLY, isAttrAllowed, isDroppedAttr, isEl, isExecutableUrl, isScriptUrl, RENAMES, VOCAB } from './tree.js';
 
 const REQUIRED_ATTRS = { img: ['src', 'alt'] };
 
@@ -79,9 +79,10 @@ export function lint(text) {
       }
       // A link or an image source that runs in the page that opens the document: the
       // editor refuses such a click, but the file itself is still the hazard, so say so.
-      if ((key === 'href' || key === 'src') && isExecutableUrl(value) && !(name === 'img' && key === 'src' && /^\s*data:image\//i.test(value))) {
-        add(line, 'url-scheme', `${key}="${value.slice(0, 40)}" runs in the page that opens this document`);
-      }
+      // An `img` source only *executes* for `javascript:`/`vbscript:` — a `data:` source
+      // there renders nothing — while a `data:` link navigates to a document that may script.
+      const badUrl = key === 'href' ? isExecutableUrl(value) : (key === 'src' && name === 'img' && isScriptUrl(value));
+      if (badUrl) add(line, 'url-scheme', `${key}="${String(value).slice(0, 40)}" may run or replace the page that opens this document`);
       const allowed = ATTR_VALUES[key];
       if (allowed && !allowed.has(value)) {
         add(line, 'attr-value', `${key}="${value}" is not one of: ${[...allowed].join(', ')}`);
