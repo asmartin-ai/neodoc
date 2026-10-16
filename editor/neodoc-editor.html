@@ -5429,7 +5429,18 @@ const edited = () => { state.dirty = true; bumpDom(); refresh(); };
 // ------------------------------------------------------------------- block edits
 
 function setBlockName(block, name) {
-  if (block.nodeName.toLowerCase() === name) name = 'p';
+  const mine = block.nodeName.toLowerCase();
+  // A `<li>`/`<td>`/`<th>` must stay what it is (SPEC §3: a list holds items, a table
+  // holds cells). Renaming the item itself produced `<ul><h1>x</h1></ul>`, whose
+  // markdown is empty and which no reader can make sense of, so the block goes inside.
+  if (mine === 'li' || mine === 'td' || mine === 'th') {
+    const inner = h(name === mine ? 'p' : name);
+    while (block.firstChild) inner.append(block.firstChild);
+    block.append(inner);
+    selectContents(inner);
+    return inner;
+  }
+  if (mine === name) name = 'p';
   const nu = h(name);
   while (block.firstChild) nu.append(block.firstChild);
   block.replaceWith(nu);
@@ -5502,6 +5513,13 @@ function insertHrHere() {
 function toggleInline(name, attrs = {}) {
   const r = caretRange();
   if (!r) return;
+  if (!r.collapsed) {
+    // A selection across blocks would wrap them in an inline element
+    // (`<strong><p>a</p><p>b</p></strong>`), which is not a shape the format has.
+    const from = blockOf(r.startContainer);
+    const to = blockOf(r.endContainer);
+    if (from !== to) { status(`select inside one block to make it ${name.toUpperCase()}`); return; }
+  }
   snapshot();
   const holder = r.collapsed ? null : ancestorNamed(r.commonAncestorContainer, name);
   if (holder && !r.collapsed) {
@@ -5671,6 +5689,12 @@ function onTab(e) {
   if (!block || block.nodeName !== 'LI') return;
   e.preventDefault();
   const list = block.parentNode;
+  // A bare `<li>` — a paste can leave one, or a file can hold one — has no list to
+  // move within: `h(list.nodeName)` would build a `<body>` element inside a paragraph.
+  if (!list || (list.nodeName !== 'UL' && list.nodeName !== 'OL')) {
+    status('this item is not inside a list');
+    return;
+  }
   if (e.shiftKey) {
     const outer = list.parentNode;
     if (outer.nodeName === 'LI') {
