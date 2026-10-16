@@ -305,6 +305,14 @@ test('images become media parts with a drawing, and unresolved ones warn', async
   assert.match(text(missing.get('word/document.xml')), /<w:t>\[image: gone\]<\/w:t>/);
 });
 
+test('a percentage width is not read as a pixel count', async () => {
+  const png = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3, 4]);
+  const src = `data:image/png;base64,${Buffer.from(png).toString('base64')}`;
+  const files = unzip(await toDocx(body(`<figure><img alt="chart" src="${src}" width="50%"></figure>`)));
+  assert.match(text(files.get('word/document.xml')), /<a:ext cx="4572000" cy="3048000"\/>/,
+    '50% keeps the 480×320 default instead of becoming 50px');
+});
+
 test('text is escaped and edge whitespace preserved', async () => {
   const doc = text(unzip(await toDocx(body('<p>a &amp; b &lt;c&gt; d</p>'))).get('word/document.xml'));
   assert.match(doc, /<w:t>a &amp; b &lt;c&gt; d<\/w:t>/);

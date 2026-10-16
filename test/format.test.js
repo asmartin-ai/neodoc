@@ -126,6 +126,12 @@ test('a title outside the head moves into it; other metadata stays put and is re
   assert.match(fmt(style, { style: 'none' }).split('<body>')[1], /<style>/, 'a body <style> stays in the body');
 });
 
+test('image dimensions are kept as written, whatever their unit', () => {
+  assert.match(fmt('<p><img src="a.png" alt="b" width="50%" height="12em"></p>'),
+    /<img alt="b" height="12em" src="a\.png" width="50%">/);
+  assert.match(fmt('<p><img src="a.png" alt="b" width="x"></p>'), /width="x"/, 'even an unreadable value is content');
+});
+
 test('unknown attributes are kept, behaviour and presentation are dropped', () => {
   // docs/SPEC.md §4.6: content we do not understand is still content, so an
   // unknown attribute survives `fmt` (and `lint` reports it, unfixable). An event

@@ -287,10 +287,11 @@ function imageRun(node, ctx) {
 
   const relId = ctx.rel(`${R}/image`, `media/${name}`, 'Internal');
 
-  const w = Number.parseFloat(node.attrs.width);
-  const h = Number.parseFloat(node.attrs.height);
-  let wpx = Number.isFinite(w) && w > 0 ? w : 0;
-  let hpx = Number.isFinite(h) && h > 0 ? h : 0;
+  // Only a bare number is a pixel size: `50%`/`12em`/`calc(…)` say nothing about
+  // pixels, so the image keeps its proportional default instead of being read as "50".
+  const px = (v) => (/^\d+(?:\.\d+)?$/.test(v ?? '') ? Number(v) : 0);
+  let wpx = px(node.attrs.width);
+  let hpx = px(node.attrs.height);
 
   if (wpx && !hpx) hpx = wpx * (2 / 3);
 

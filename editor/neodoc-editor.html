@@ -2847,11 +2847,10 @@ function cleanAttrs(name, attrs, warnings) {
     }
     out[key] = value; // unknown attributes are kept: lint reports them
   }
-  if (name === 'img') {
-    if (out.alt === undefined) out.alt = '';
-    if (out.width && !/^\d+$/.test(out.width)) delete out.width;
-    if (out.height && !/^\d+$/.test(out.height)) delete out.height;
-  }
+  if (name === 'img' && out.alt === undefined) out.alt = '';
+  // `width`/`height` are kept exactly as written: SPEC §3 allows them, and `50%` or
+  // `12em` is as legitimate as `300`. A consumer that cannot read one ignores it
+  // (docx falls back to its own size) rather than having it deleted here.
   if (name === 'a' && out.target === '_blank' && !out.rel) out.rel = 'noopener';
   return out;
 }
