@@ -182,7 +182,7 @@ format itself to another language is a documented protocol, not guesswork —
 ## Testing
 
 ```bash
-npm test                              # 100 Node tests: core, CLI, conformance, perf, bundle
+npm test                              # 108 Node tests: core, CLI, conformance, perf, Windows paths
 npm run lint                          # oxlint with the vendored anti-slop rules
 node tools/bundle.js --check          # the generated editor page is in sync
 npx playwright install chromium firefox webkit

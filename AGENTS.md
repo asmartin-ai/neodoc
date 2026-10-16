@@ -23,7 +23,7 @@ and spec must not disagree. If they do, fix both in the same change.
 ## Commands
 
 ```bash
-node --test test/                     # all tests (no watch, no config)
+npm test                              # all Node tests (node --test; no watch, no config)
 node --test test/format.test.js       # one file
 node bin/neodoc.js fmt -w doc.nd.html
 node bin/neodoc.js lint doc.nd.html
