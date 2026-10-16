@@ -103,10 +103,6 @@ maintenance.
 
 ## Maintenance
 
-- **Dead code**: `src/tree.js` `RAW`, `isText`, `isComment`, `childrenOf`,
-  `findById`, `clone`; `src/format.js` `reindent`, `INDENT`; `src/docx.js`
-  `o.spacing`; `editor/editor.js` `state.served` / `state.suggest`. Exported or
-  stored, never read.
 - **`tools/bundle.js` does not support `export { a as b }` or an aliased import**
   (`import { a as z }`): it would emit invalid JS, and `--check` cannot see it. No
   module uses `as` today, so it is latent — either support it or fail loudly.
