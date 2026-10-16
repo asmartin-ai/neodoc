@@ -297,3 +297,15 @@ test('comment threads and tracked changes round-trip', () => {
   assert.equal(fmt(out), out);
   assert.equal(lint(out).length, 0);
 });
+
+test('a nested <head> does not invert the head findings', () => {
+  const doc = '<!doctype html><html data-neodoc="1" lang="en"><head><meta charset="utf-8"><title>T</title>'
+    + '<head><p>inner</p></head></head><body><p>x</p></body></html>';
+  const rules = lint(doc).map((f) => `${f.rule}${f.fixable ? '*' : ''}`);
+  assert.ok(!rules.includes('misplaced-head'), `the document's own head children are fine, got ${rules}`);
+  assert.ok(!rules.includes('misplaced-body*'), `the nested head's <p> is not a fixable promise, got ${rules}`);
+  assert.ok(rules.includes('structure'), `a nested <head> is reported, got ${rules}`);
+  // `lint --fix` must not report the same fixable finding again.
+  const fixed = lint(fmt(doc)).filter((f) => f.fixable).map((f) => f.rule);
+  assert.deepEqual(fixed, []);
+});

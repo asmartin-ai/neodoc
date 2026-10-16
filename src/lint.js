@@ -55,7 +55,7 @@ export function lint(text) {
     if (name === 'title') title = true;
     if (HEAD_ONLY.has(name)) headOnly.push([node, line]);
     if (name === 'body') body = node;
-    if (name === 'head') head = node;
+    if (name === 'head' && !head) head = node; // the first one; a second is junk inside it
     if (name === '#root' || !VOCAB.has(name)) {
       // `fmt` keeps an unknown element (invariant 5): a real finding, but not one that
       // `--fix` can do anything about.
@@ -101,14 +101,26 @@ export function lint(text) {
   const inHead = new Set(head ? [head, ...descendants(head)] : []);
   // A vocabulary element the head does not allow is content: `fmt` moves it into the
   // body, so the finding is fixable; a `<meta>` with nothing to declare is a warning.
-  for (const node of head ? descendants(head) : []) {
+  // Only the head's own children: those are what `fmt` relocates, so those are what a
+  // fixable finding may promise.
+  for (const node of (head && head.children) || []) {
     if (node.type !== 'element') continue;
     const name = RENAMES[node.name] || node.name;
-    if (name !== 'head' && VOCAB.has(name) && !HEAD_ONLY.has(name)) {
+    if (['html', 'head', 'body'].includes(name)) continue; // reported as `structure` below
+    if (VOCAB.has(name) && !HEAD_ONLY.has(name)) {
       add(at(node.pos ?? 0), 'misplaced-body', `<${name}> belongs in <body>, not <head>`, true);
     }
     if (name === 'meta' && !node.attrs.name && !node.attrs.charset) {
       add(at(node.pos ?? 0), 'meta-unused', '<meta> without a name or charset does nothing', false, 'warning');
+    }
+  }
+  // A second `<head>` (or a `<body>`/`<html>` out of place) is kept by `fmt`, so it is
+  // reported rather than promised to be repaired. SPEC §3 says so; nothing did.
+  for (const node of [root, ...descendants(root)]) {
+    if (node.type !== 'element') continue;
+    const name = RENAMES[node.name] || node.name;
+    if ((name === 'head' && node !== head) || (name === 'body' && node !== body) || (name === 'html' && node !== root.children.find((c) => c.name === 'html'))) {
+      add(at(node.pos ?? 0), 'structure', `<${name}> appears outside its place and is kept as written`, false);
     }
   }
   for (const [node, line] of headOnly) {
