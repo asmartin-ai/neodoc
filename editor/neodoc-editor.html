@@ -2689,6 +2689,7 @@ function parse(src) {
   const stack = [root];
   const dropped = []; // names of start tags dropped for depth
   let depth = 0;      // open elements that are not scaffolding
+  let capped = false; // whether the depth cap has already been reported
   const n = src.length;
   let lower = '';
   const lowerOf = () => (lower ||= src.toLowerCase());
@@ -2766,8 +2767,9 @@ function parse(src) {
     if (!t.name) { err('malformed tag', i); pushText('<', i); i++; continue; }
     if (t.stray) err('malformed attribute dropped', i);
     if (depth >= MAX_DEPTH) {
-      // Record the name so its own end tag closes nothing, and keep the content.
-      err(`nesting deeper than ${MAX_DEPTH} levels is not represented`, i);
+      // Record the name so its own end tag closes nothing, and keep the content. One
+      // finding for the cap, not one per tag: 5 000 nested sections said it 4 488 times.
+      if (!capped) { err(`nesting deeper than ${MAX_DEPTH} levels is not represented`, i); capped = true; }
       if (!VOID.has(t.name) && !t.selfClosing) dropped.push(t.name);
       i = t.end;
       continue;

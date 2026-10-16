@@ -318,3 +318,8 @@ test('head content moves to the front of the body, and head comments are kept', 
   assert.match(kept.split('</head>')[0], /<!--KEEP-ME-->/, 'a comment in the head is content');
   assert.equal(fmt(kept), kept);
 });
+
+test('the nesting cap is reported once, not once per tag', () => {
+  const deep = `<!doctype html><html><body>${'<section>'.repeat(5000)}<p>x</p>${'</section>'.repeat(5000)}</body></html>`;
+  assert.equal(parse(deep).errors.filter((e) => /nesting deeper/.test(e.message)).length, 1);
+});
