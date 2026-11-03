@@ -7,6 +7,11 @@ A document format to replace `.docx`: **one plaintext HTML file** that you edit
 WYSIWYG with markdown-native input, read in any browser with zero JavaScript, and
 edit from the command line by CSS selector.
 
+**Status:** Experimental document format and editor; review the format contract
+before relying on it for important documents.
+
+![Neodoc editor showing a sample document](docs/media/editor.png)
+
 ```html
 <!doctype html>
 <html data-neodoc="1" lang="en">
@@ -36,17 +41,27 @@ edit from the command line by CSS selector.
 
 ## Quickstart
 
+Clone the repository and use Node.js 20 or newer; the CLI has no runtime
+dependencies and does not need a build step.
+
 ```bash
-neodoc new report.nd.html --title "Quarterly report"   # create
-open editor/neodoc-editor.html                         # WYSIWYG edit, no server
-neodoc get report.nd.html 'body > p:nth-child(2)' --json
-neodoc set report.nd.html 'h1' --md '# Introduction'
-neodoc note add report.nd.html 'body > p' --on 'churn figure' --say 'Source?'
-neodoc lint report.nd.html && neodoc md report.nd.html && neodoc docx report.nd.html
+git clone https://github.com/asmartin-ai/neodoc.git
+cd neodoc
+node bin/neodoc.js new report.nd.html --title "Quarterly report"
 ```
 
-No dependencies, no build step: `node bin/neodoc.js …` (Node ≥ 20, Bun, or a
-single compiled binary). Tests: `node --test test/`.
+Open `editor/neodoc-editor.html` in a browser, then open `report.nd.html` in
+the editor. Saving uses the browser's file access support or downloads a copy.
+For in-place saving in browsers without file access support, run
+`node bin/neodoc.js serve report.nd.html --open` instead.
+
+```bash
+node bin/neodoc.js get report.nd.html 'h1' --json
+node bin/neodoc.js set report.nd.html 'h1' --md '# Introduction'
+node bin/neodoc.js lint report.nd.html
+node bin/neodoc.js md report.nd.html
+node bin/neodoc.js docx report.nd.html
+```
 
 ## Why it looks like this
 
