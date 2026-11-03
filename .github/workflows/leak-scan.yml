@@ -1,0 +1,52 @@
+name: leak-scan
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: leak-scan-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gitleaks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: 'false'
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: 'false'
+          GITLEAKS_ENABLE_SUMMARY: 'false'
+      - name: Scan complete history with redaction
+        run: gitleaks git --redact --no-banner .
+
+  personal-paths:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PERSONAL_PATH_RE: '(^|[^A-Za-z0-9_./-])/home/[a-z]|C:\\Users\\|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Scan tracked files without printing matches
+        shell: bash
+        run: |
+          set +e
+          git grep -lIE "$PERSONAL_PATH_RE" -- . \
+            ':(exclude).github/workflows/leak-scan.yml'
+          status=$?
+          set -e
+          if [ "$status" -eq 1 ]; then exit 0; fi
+          if [ "$status" -ne 0 ]; then exit "$status"; fi
+          echo '::error::Personal path pattern found in tracked files'
+          exit 1
