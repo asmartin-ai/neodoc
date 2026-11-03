@@ -2,6 +2,7 @@ name: leak-scan
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 permissions:
@@ -33,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      PERSONAL_PATH_RE: '(^|[^A-Za-z0-9_./-])/home/[a-z]|C:\\Users\\|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.'
+      PERSONAL_PATH_RE: '(^|[^A-Za-z0-9_.-])/home/[A-Za-z]|C:\\Users\\|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.'
     steps:
       - uses: actions/checkout@v7
         with:
