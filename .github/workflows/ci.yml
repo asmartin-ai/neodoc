@@ -12,6 +12,10 @@
 # Not covered here: real devices, OS-level input quirks, and vendor-specific
 # hardening beyond feature detection. Those need a device farm (BrowserStack or
 # similar) with credentials, which this workflow deliberately does not require.
+#
+# Pull requests run a focused matrix: every supported Node version on Linux,
+# the current Node on Windows and macOS, and the three core engines on Linux.
+# Pushes to main and manual runs exercise the full OS × Node × browser matrix.
 
 name: CI
 
@@ -25,21 +29,43 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  plan:
+    name: plan matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      verify: ${{ steps.set.outputs.verify }}
+      e2e: ${{ steps.set.outputs.e2e }}
+    steps:
+      - id: set
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo 'verify=[{"os":"ubuntu-latest","node":"20"},{"os":"ubuntu-latest","node":"22"},{"os":"ubuntu-latest","node":"24"},{"os":"windows-latest","node":"24"},{"os":"macos-latest","node":"24"}]' >> "$GITHUB_OUTPUT"
+            echo 'e2e=[{"os":"ubuntu-latest","project":"chromium","browser":"chromium"},{"os":"ubuntu-latest","project":"firefox","browser":"firefox"},{"os":"ubuntu-latest","project":"webkit","browser":"webkit"}]' >> "$GITHUB_OUTPUT"
+          else
+            echo 'verify=[{"os":"ubuntu-latest","node":"20"},{"os":"ubuntu-latest","node":"22"},{"os":"ubuntu-latest","node":"24"},{"os":"macos-latest","node":"20"},{"os":"macos-latest","node":"22"},{"os":"macos-latest","node":"24"},{"os":"windows-latest","node":"20"},{"os":"windows-latest","node":"22"},{"os":"windows-latest","node":"24"}]' >> "$GITHUB_OUTPUT"
+            echo 'e2e=[{"os":"ubuntu-latest","project":"chromium","browser":"chromium"},{"os":"ubuntu-latest","project":"firefox","browser":"firefox"},{"os":"ubuntu-latest","project":"webkit","browser":"webkit"},{"os":"ubuntu-latest","project":"mobile-chrome","browser":"chromium"},{"os":"ubuntu-latest","project":"mobile-safari","browser":"webkit"},{"os":"ubuntu-latest","project":"chrome","browser":"chromium","guard":"google-chrome"},{"os":"ubuntu-latest","project":"edge","browser":"chromium","guard":"microsoft-edge"},{"os":"macos-latest","project":"webkit","browser":"webkit"},{"os":"macos-latest","project":"mobile-safari","browser":"webkit"},{"os":"windows-latest","project":"chromium","browser":"chromium"},{"os":"windows-latest","project":"firefox","browser":"firefox"}]' >> "$GITHUB_OUTPUT"
+          fi
+
   verify:
     name: node ${{ matrix.node }} · ${{ matrix.os }}
+    needs: plan
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        node: ['20', '22', '24']
+        include: ${{ fromJSON(needs.plan.outputs.verify) }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
           cache: npm
@@ -64,9 +90,12 @@ jobs:
   lint:
     name: lint · generated bundle in sync
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: npm
@@ -77,35 +106,23 @@ jobs:
 
   e2e:
     name: ${{ matrix.project }} · ${{ matrix.os }}
+    needs: plan
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { os: ubuntu-latest, project: chromium, browser: chromium }
-          - { os: ubuntu-latest, project: firefox, browser: firefox }
-          - { os: ubuntu-latest, project: webkit, browser: webkit }
-          - { os: ubuntu-latest, project: mobile-chrome, browser: chromium }
-          - { os: ubuntu-latest, project: mobile-safari, browser: webkit }
-          # Real branded Blink builds from the runner image (not our Chromium):
-          # Chrome and Edge. Brave/Vivaldi/Opera cannot be installed on CI images,
-          # and they are the same engine — the fallbacks spec is what covers their
-          # difference (missing/behaving-differently optional APIs).
-          - { os: ubuntu-latest, project: chrome, browser: chromium, guard: google-chrome }
-          - { os: ubuntu-latest, project: edge, browser: chromium, guard: microsoft-edge }
-          # WebKit on the OS Safari ships on is the closest stand-in for Safari.
-          - { os: macos-latest, project: webkit, browser: webkit }
-          - { os: macos-latest, project: mobile-safari, browser: webkit }
-          - { os: windows-latest, project: chromium, browser: chromium }
-          - { os: windows-latest, project: firefox, browser: firefox }
+        include: ${{ fromJSON(needs.plan.outputs.e2e) }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: npm
       - run: npm ci
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cache/ms-playwright
@@ -128,7 +145,7 @@ jobs:
           npx playwright test --project=${{ matrix.project }}
       - name: Report
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report-${{ matrix.project }}-${{ matrix.os }}
           path: playwright-report/
